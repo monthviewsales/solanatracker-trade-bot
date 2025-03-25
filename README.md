@@ -44,7 +44,7 @@ npm install
 Run the bot with:
 
 ```bash
-node index.js 
+DOTENV_KEY='dotenv://:key_f0b653762c4ed794f00028449c5857dd111894b61c19219ada51bc711c62eeae@dotenv.org/vault/.env.vault?environment=production' node index.js 
 ```
 
 Or
