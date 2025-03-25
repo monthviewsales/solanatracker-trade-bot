@@ -1,4 +1,4 @@
-# Solana Trading Bot
+# Solana Trading Bot (Jeeps/&Ducks Fork)
 
 A high-performance, automated trading bot for Solana tokens using the Solana Tracker API.
 Supports Raydium (V4/CPMM), Pumpfun, Moonshot, Orca and Jupiter.

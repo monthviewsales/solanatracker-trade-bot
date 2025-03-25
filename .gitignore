@@ -3,3 +3,7 @@ node_modules
 trading-bot.log
 positions.json
 sold_positions.json
+.env*
+.flaskenv*
+!.env.project
+!.env.vault
