@@ -289,11 +289,13 @@ class TradingBot {
       this.walletAmountCache.delete(token.token.mint);
       return txid;
     } catch (error) {
-      logger.error(`Error performing ${isBuy ? "buy" : "sell"}`, {
+      logger.error(`Swap failed for ${isBuy ? "buy" : "sell"} [${token.token.symbol}] [${token.token.mint}]`, {
         message: error.message,
         response: error.response?.data,
         stack: error.stack,
+        poolData: token.pools?.[0] || "No pool data",
       });
+      logger.debug(`Full token data on swap failure: ${JSON.stringify(token, null, 2)}`);
       if (isBuy) {
         this.buyingTokens.delete(token.token.mint);
       } else {
