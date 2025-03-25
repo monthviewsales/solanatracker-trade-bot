@@ -35,10 +35,13 @@ const logger = winston.createLogger({
 
 class TradingBot {
   constructor() {
+    this.walletAmountCache = new Map(); // mint => { amount, timestamp }
+    this.walletCacheTTL = 60000; // 1 minute
     this.config = {
       amount: parseFloat(process.env.AMOUNT),
       delay: parseInt(process.env.DELAY),
       monitorInterval: parseInt(process.env.MONITOR_INTERVAL),
+      trendingtimeframe: process.env.TREND_TIME,
       slippage: parseInt(process.env.SLIPPAGE),
       priorityFee: parseFloat(process.env.PRIORITY_FEE),
       useJito: process.env.JITO === "true",
@@ -75,12 +78,13 @@ class TradingBot {
     await this.loadSoldPositions();
   }
 
+  // Fetches trending tokens for the timeframe set in .env
   async fetchTokens() {
     try {
-      const response = await session.get("/tokens/latest");
+      const response = await session.get(`/tokens/trending/${this.config.trendingtimeframe}`);
       return response.data;
     } catch (error) {
-      logger.error(`Error fetching token data [${error?.response?.data || error}]`);
+      logger.error(`Error fetching trending token data [${error?.response?.data || error}]`);
       return [];
     }
   }
@@ -97,7 +101,8 @@ class TradingBot {
 
   filterTokens(tokens) {
     return tokens.filter((token) => {
-      const pool = token.pools[0];
+      const pool = token.pools?.[0];
+      if (!pool) return false;
       const liquidity = pool.liquidity.usd;
       const marketCap = pool.marketCap.usd;
       const riskScore = token.risk.score;
@@ -124,7 +129,12 @@ class TradingBot {
   }
 
   async getWalletAmount(wallet, mint, retries = 3) {
-    await sleep(5000);
+    const now = Date.now();
+    const cached = this.walletAmountCache.get(mint);
+    if (cached && (now - cached.timestamp < this.walletCacheTTL)) {
+      return cached.amount;
+    }
+    await sleep(5000); // Initial pause before attempts
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
         const tokenAccountInfo =
@@ -141,16 +151,23 @@ class TradingBot {
               .uiAmount;
 
           if (balance > 0) {
+            this.walletAmountCache.set(mint, { amount: balance, timestamp: Date.now() });
+            logger.info(`Wallet balance for token ${mint}: ${balance}`);
             return balance;
           }
         }
 
         if (attempt < retries) {
-          await sleep(10000);
+          const backoff = 5000 * Math.pow(2, attempt); // 5s, 10s, 20s...
+          if (attempt % 2 === 0) {
+            logger.warn(`Retry ${attempt + 1}/${retries + 1} getting wallet for ${mint}`);
+          }
+          await sleep(backoff);
         }
       } catch (error) {
         if (attempt < retries) {
-          await sleep(10000);
+          const backoff = 5000 * Math.pow(2, attempt);
+          await sleep(backoff);
         } else {
           logger.error(
             `All attempts failed. Error getting wallet amount for token ${mint}:`,
@@ -260,12 +277,13 @@ class TradingBot {
       }
 
       await this.savePositions();
+      this.walletAmountCache.delete(token.token.mint);
       return txid;
     } catch (error) {
-      logger.error(
-        `Error performing ${isBuy ? "buy" : "sell"}: ${error.message}`,
-        { error }
-      );
+      logger.error(`Error performing ${isBuy ? "buy" : "sell"}:`, {
+        message: error.message,
+        stack: error.stack,
+      });
       if (isBuy) {
         this.buyingTokens.delete(token.token.mint);
       } else {
@@ -286,7 +304,7 @@ class TradingBot {
 
     const tokenData = await this.fetchTokenData(tokenMint);
     if (!tokenData) {
-      logger.error(`Failed to fetch data for token ${tokenMint}`);
+      logger.error(`Failed to fetch data for token ${tokenMint} (checkAndSellPosition)`);
       return;
     }
 
@@ -408,7 +426,10 @@ class TradingBot {
       this.seenTokens = new Set(this.positions.keys());
       logger.info(`Loaded ${this.positions.size} positions from file`);
     } catch (error) {
-      if (error.code !== "ENOENT") {
+      if (error.code === "ENOENT") {
+        logger.warn("positions.json not found. Starting fresh.");
+        await this.savePositions();
+      } else {
         logger.error("Error loading positions", { error });
       }
     }
@@ -427,10 +448,17 @@ class TradingBot {
     }
   }
 
+  startHeartbeat() {
+    setInterval(() => {
+      logger.info(`Heartbeat: monitoring ${this.positions.size} open positions`);
+    }, 30000);
+  }
+
   async start() {
     try {
     logger.info("Starting Trading Bot");
     await this.initialize();
+    this.startHeartbeat();
 
     // Run buying and selling loops concurrently
     await Promise.allSettled([this.buyMonitor(), this.positionMonitor()]);
