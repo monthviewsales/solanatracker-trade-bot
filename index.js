@@ -84,7 +84,11 @@ class TradingBot {
       const response = await session.get(`/tokens/trending/${this.config.trendingtimeframe}`);
       return response.data;
     } catch (error) {
-      logger.error(`Error fetching trending token data [${error?.response?.data || error}]`);
+      logger.error("Error fetching trending token data", {
+        message: error.message,
+        response: error.response?.data,
+        stack: error.stack,
+      });
       return [];
     }
   }
@@ -94,7 +98,11 @@ class TradingBot {
       const response = await session.get(`/tokens/${tokenId}`);
       return response.data;
     } catch (error) {
-      logger.error(`Error fetching token data [${error?.response?.data || error}]`);
+      logger.error("Error fetching token data", {
+        message: error.message,
+        response: error.response?.data,
+        stack: error.stack,
+      });
       return null
     }
   }
@@ -280,8 +288,9 @@ class TradingBot {
       this.walletAmountCache.delete(token.token.mint);
       return txid;
     } catch (error) {
-      logger.error(`Error performing ${isBuy ? "buy" : "sell"}:`, {
+      logger.error(`Error performing ${isBuy ? "buy" : "sell"}`, {
         message: error.message,
+        response: error.response?.data,
         stack: error.stack,
       });
       if (isBuy) {
@@ -329,7 +338,11 @@ class TradingBot {
       if (currentAmount !== null && currentAmount > 0) {
         this.sellingPositions.add(tokenMint);
         this.performSwap(tokenData, false).catch((error) => {
-          logger.error(`Error selling position: ${error.message}`, { error });
+          logger.error("Error selling position", {
+            message: error.message,
+            response: error.response?.data,
+            stack: error.stack,
+          });
           this.sellingPositions.delete(tokenMint);
         });
       } else {
@@ -351,7 +364,11 @@ class TradingBot {
         if (!this.positions.has(token.token.mint) && !this.buyingTokens.has(token.token.mint)) {
           this.buyingTokens.add(token.token.mint);
           this.performSwap(token, true).catch((error) => {
-            logger.error(`Error buying token: ${error.message}`, { error });
+            logger.error("Error buying token", {
+              message: error.message,
+              response: error.response?.data,
+              stack: error.stack,
+            });
             this.buyingTokens.delete(token.token.mint);
           });
         }
