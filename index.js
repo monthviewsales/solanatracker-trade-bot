@@ -56,6 +56,7 @@ class TradingBot {
       maxNegativePnL: parseFloat(process.env.MAX_NEGATIVE_PNL) || -Infinity,
       maxPositivePnL: parseFloat(process.env.MAX_POSITIVE_PNL) || Infinity,
       markets: process.env.MARKETS?.split(",").map((m) => m.trim()) || ['raydium', 'orca', 'pumpfun', 'moonshot', 'raydium-cpmm'],
+      maxActivePositions: parseInt(process.env.MAX_ACTIVE_POSITIONS) || 5,
     };
 
     this.privateKey = process.env.PRIVATE_KEY;
@@ -360,23 +361,29 @@ class TradingBot {
 
   async buyMonitor() {
     while (true) {
-      const tokens = await this.fetchTokens();
-      const filteredTokens = this.filterTokens(tokens);
-
-      for (const token of filteredTokens) {
-        if (!this.positions.has(token.token.mint) && !this.buyingTokens.has(token.token.mint)) {
-          this.buyingTokens.add(token.token.mint);
-          this.performSwap(token, true).catch((error) => {
-            logger.error("Error buying token", {
-              message: error.message,
-              response: error.response?.data,
-              stack: error.stack,
+      const currentActive = this.positions.size;
+      const maxActive = this.config.maxActivePositions;
+      if (currentActive < maxActive) {
+        const openSlots = maxActive - currentActive;
+        const tokens = await this.fetchTokens();
+        const filteredTokens = this.filterTokens(tokens);
+        let attempts = 0;
+        for (const token of filteredTokens) {
+          if (attempts >= openSlots) break;
+          if (!this.positions.has(token.token.mint) && !this.buyingTokens.has(token.token.mint)) {
+            this.buyingTokens.add(token.token.mint);
+            this.performSwap(token, true).catch((error) => {
+              logger.error("Error buying token", {
+                message: error.message,
+                response: error.response?.data,
+                stack: error.stack,
+              });
+              this.buyingTokens.delete(token.token.mint);
             });
-            this.buyingTokens.delete(token.token.mint);
-          });
+            attempts++;
+          }
         }
       }
-
       await sleep(this.config.delay);
     }
   }
@@ -466,6 +473,14 @@ class TradingBot {
     } catch (error) {
       logger.error("Error saving positions", { error });
     }
+  }
+
+  async updatePositionWalletCache() {
+    const wallet = this.keypair.publicKey.toBase58();
+    for (const mint of this.positions.keys()) {
+      await this.getWalletAmount(wallet, mint);
+    }
+    logger.info('Updated wallet cache for loaded positions');
   }
 
   startHeartbeat() {
