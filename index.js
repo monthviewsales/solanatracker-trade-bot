@@ -75,6 +75,7 @@ class TradingBot {
     this.keypair = Keypair.fromSecretKey(bs58.decode ? bs58.decode (this.privateKey): bs58.default.decode(this.privateKey));
     this.solanaTracker = new SolanaTracker(this.keypair, this.config.rpcUrl);
     await this.loadPositions();
+    await this.validatePositions();
     await this.loadSoldPositions();
   }
 
@@ -469,6 +470,51 @@ class TradingBot {
     setInterval(() => {
       logger.info(`Heartbeat: monitoring ${this.positions.size} open positions`);
     }, 30000);
+  }
+
+  async validatePositions() {
+    logger.info("Validating loaded positions with wallet balances...");
+
+    let removed = 0;
+    for (const [mint, position] of this.positions.entries()) {
+      const balance = await this.getWalletAmount(this.keypair.publicKey.toBase58(), mint);
+      if (!balance || balance === 0) {
+        logger.warn(`Removing stale position for ${position.symbol} (${mint}) — no balance in wallet.`);
+        this.positions.delete(mint);
+        this.seenTokens.delete(mint);
+        
+        const soldEntry = {
+          txid: position.txid,
+          symbol: position.symbol,
+          entryPrice: position.entryPrice,
+          amount: position.amount,
+          openTime: position.openTime,
+          exitPrice: 0,
+          pnl: -position.entryPrice * position.amount,
+          pnlPercentage: -100,
+          closeTime: Date.now(),
+          closeTxid: "MANUAL"
+        };
+        
+        this.soldPositions.push(soldEntry);
+        
+        try {
+          await this.saveSoldPositions();
+          logger.info(`Logged manual sale of ${position.symbol} to sold_positions.json`);
+        } catch (e) {
+          logger.error("Error writing to sold_positions.json", { message: e.message });
+        }
+        
+        removed++;
+      }
+    }
+
+    if (removed > 0) {
+      await this.savePositions();
+      logger.info(`Removed ${removed} stale position(s) from positions file.`);
+    } else {
+      logger.info("All loaded positions are valid.");
+    }
   }
 
   async start() {
