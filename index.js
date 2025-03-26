@@ -51,7 +51,7 @@ class TradingBot {
       minMarketCap: parseFloat(process.env.MIN_MARKET_CAP) || 0,
       maxMarketCap: parseFloat(process.env.MAX_MARKET_CAP) || Infinity,
       minRiskScore: parseInt(process.env.MIN_RISK_SCORE) || 0,
-      maxRiskScore: parseInt(process.env.MAX_RISK_SCORE) || 10,
+      maxRiskScore: parseInt(process.env.MAX_RISK_SCORE) || 6,
       requireSocialData: process.env.REQUIRE_SOCIAL_DATA === "true",
       maxNegativePnL: parseFloat(process.env.MAX_NEGATIVE_PNL) || -Infinity,
       maxPositivePnL: parseFloat(process.env.MAX_POSITIVE_PNL) || Infinity,
@@ -69,6 +69,10 @@ class TradingBot {
     this.buyingTokens = new Set();
     this.sellingPositions = new Set();
 
+    // This is our coin stoage for now
+    this.targetListFile = "target_list.json";
+    this.targetList = [];
+
     this.connection = new Connection(this.config.rpcUrl);
   }
 
@@ -78,6 +82,7 @@ class TradingBot {
     await this.loadPositions();
     await this.validatePositions();
     await this.loadSoldPositions();
+    await this.loadTargetList();
   }
 
   // Fetches trending tokens for the timeframe set in .env
@@ -109,8 +114,57 @@ class TradingBot {
     }
   }
 
+  async getTokenChart(tokenId) {
+    try {
+      // This is the candlestick API
+      // https://docs.solanatracker.io/public-data-api/docs#get-charttoken-1
+      const response = await session.get(`/chart/${tokenId}/1m`);
+      // The API response now looks like:
+      // {
+      //   "oclhv": [
+      //     {
+      //       "open": 0.011223689525154462,
+      //       "close": 0.011223689525154462,
+      //       "low": 0.011223689525154462,
+      //       "high": 0.011223689525154462,
+      //       "volume": 683.184501136,
+      //       "time": 1722514489
+      //     }
+      //   ]
+      // }
+      const chartData = response.data;
+      // Update target list entry with chart data if it exists
+      const targetEntry = this.targetList.find(entry => entry.contract === tokenId);
+      if (targetEntry) {
+        targetEntry.chartData = chartData;
+        await this.saveTargetList();
+        logger.info(`Updated target list entry for token ${tokenId} with chart data.`);
+      } else {
+        logger.warn(`No target list entry found for token ${tokenId}.`);
+      }
+      return chartData;
+    } catch (error) {
+      logger.error("Error fetching token chart", {
+        message: error.message,
+        response: error.response?.data,
+        stack: error.stack,
+      });
+      return null;
+    }
+  }
+
   filterTokens(tokens) {
     return tokens.filter((token) => {
+      // Check target list override
+      const targetEntry = this.targetList.find(entry => entry.contract === token.token.mint || entry.symbol === token.token.symbol);
+      if (targetEntry) {
+        if (targetEntry.status === "blacklist" || targetEntry.status === "hold") {
+          return false;
+        } else if (targetEntry.status === "target") {
+          return true;
+        }
+      }
+
       const pool = token.pools?.[0];
       if (!pool) return false;
       const liquidity = pool.liquidity.usd;
@@ -365,22 +419,57 @@ class TradingBot {
       const maxActive = this.config.maxActivePositions;
       if (currentActive < maxActive) {
         const openSlots = maxActive - currentActive;
+
+        // Step 1: Fetch tokens from API and filter them
         const tokens = await this.fetchTokens();
         const filteredTokens = this.filterTokens(tokens);
-        let attempts = 0;
+
+        // Step 2: Add each filtered token to the target list if not already present, with default status "hold"
         for (const token of filteredTokens) {
+          let targetEntry = this.targetList.find(entry => entry.contract === token.token.mint || entry.symbol === token.token.symbol);
+          if (!targetEntry) {
+            targetEntry = {
+              symbol: token.token.symbol,
+              contract: token.token.mint,
+              status: "hold",
+              chartData: {}
+            };
+            this.targetList.push(targetEntry);
+          }
+        }
+        // Save the updated target list
+        await this.saveTargetList();
+
+        // Step 3: For each target list entry, update chart data and evaluate trade
+        for (const targetEntry of this.targetList) {
+          // Update chart data for the token
+          await this.getTokenChart(targetEntry.contract);
+          // Evaluate trade and update status accordingly:
+          // If evaluateTrade returns true, mark as "target", else leave as "hold"
+          targetEntry.status = this.evaluateTrade(targetEntry) ? "target" : "hold";
+        }
+        // Save the target list after evaluation
+        await this.saveTargetList();
+
+        // Step 4: Attempt to buy tokens from the target list that are marked as "target"
+        let attempts = 0;
+        for (const targetEntry of this.targetList) {
           if (attempts >= openSlots) break;
-          if (!this.positions.has(token.token.mint) && !this.buyingTokens.has(token.token.mint)) {
-            this.buyingTokens.add(token.token.mint);
-            this.performSwap(token, true).catch((error) => {
-              logger.error("Error buying token", {
-                message: error.message,
-                response: error.response?.data,
-                stack: error.stack,
+          if (targetEntry.status === "target") {
+            // Fetch token data for this entry so we can execute the swap
+            const tokenData = await this.fetchTokenData(targetEntry.contract);
+            if (tokenData && !this.positions.has(targetEntry.contract) && !this.buyingTokens.has(targetEntry.contract)) {
+              this.buyingTokens.add(targetEntry.contract);
+              this.performSwap({ token: tokenData }, true).catch((error) => {
+                logger.error("Error buying token", {
+                  message: error.message,
+                  response: error.response?.data,
+                  stack: error.stack,
+                });
+                this.buyingTokens.delete(targetEntry.contract);
               });
-              this.buyingTokens.delete(token.token.mint);
-            });
-            attempts++;
+              attempts++;
+            }
           }
         }
       }
@@ -443,6 +532,48 @@ class TradingBot {
     } catch (error) {
       logger.error("Error saving sold positions", { error });
     }
+  }
+
+  async saveTargetList() {
+    try {
+      const fileContent = `/*\nData specification for target list:\n{\n  "targets": [\n    {\n      "symbol": "TOKEN_SYMBOL",\n      "contract": "TOKEN_CONTRACT_ADDRESS",\n      "status": "hold", // possible values: "hold", "target", "blacklist"\n      "chartData": {} // one minute OHLCV data\n    }\n  ]\n}\n*/\n{\n  "targets": ${JSON.stringify(this.targetList, null, 2)}\n}`;
+      await fs.writeFile(this.targetListFile, fileContent);
+      logger.info(`Saved ${this.targetList.length} target list entries to ${this.targetListFile}`);
+    } catch (error) {
+      logger.error("Error saving target list", { error });
+    }
+  }
+
+  async loadTargetList() {
+    try {
+      const data = await fs.readFile(this.targetListFile, "utf8");
+      // Remove header comments if present
+      const jsonData = data.replace(/\/\*[\s\S]*?\*\//, "").trim();
+      const parsed = JSON.parse(jsonData);
+      this.targetList = parsed.targets;
+      logger.info(`Loaded ${this.targetList.length} target list entries from ${this.targetListFile}`);
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        logger.warn(`${this.targetListFile} not found. Starting with empty target list.`);
+        this.targetList = [];
+        // Create the file with a header comment and empty target list
+        await fs.writeFile(
+          this.targetListFile,
+          `/*\nData specification for target list:\n{\n  "targets": [\n    {\n      "symbol": "TOKEN_SYMBOL",\n      "contract": "TOKEN_CONTRACT_ADDRESS",\n      "status": "hold", // possible values: "hold", "target", "blacklist"\n      "chartData": {} // one minute OHLCV data\n    }\n  ]\n}\n*/\n{\n  "targets": []\n}`
+        );
+      } else {
+        logger.error("Error loading target list", { error });
+      }
+    }
+  }
+
+  evaluateTrade(targetEntry) {
+    // TODO: Implement advanced trading algorithm logic using targetEntry.chartData.
+    // For now, if chartData.oclhv exists and has data, mark as "target"; otherwise, "hold".
+    if (targetEntry.chartData && targetEntry.chartData.oclhv && targetEntry.chartData.oclhv.length > 0) {
+      return true; // Indicates the token qualifies to be marked as "target"
+    }
+    return false; // Remains "hold"
   }
   
   async loadPositions() {
