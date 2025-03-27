@@ -2,12 +2,21 @@ require("dotenv").config();
 const { SolanaTracker } = require("solana-swap");
 const { Keypair, PublicKey, Connection } = require("@solana/web3.js");
 const bs58 = require("bs58");
-const winston = require("winston");
 const chalk = require("chalk");
 const axios = require("axios");
+const logger = require('./utils/logger');
 const fs = require("fs").promises;
-// const { ema, bbands, stochrsi } = require("@ixjb94/indicators-js");
+// API Work
+const {
+  fetchTrendingTokens,
+  fetchTokenDetails,
+  fetchChartData,
+} = require('./lib/solanaTrackerAPI');
+
 const { EMA, RSI, BollingerBands } = require("technicalindicators");
+
+const EventEmitter = require('events');
+const runStartup = require('./bot/StartupManager');
 
 const session = axios.create({
   baseURL: "https://data.solanatracker.io/",
@@ -19,24 +28,9 @@ const sleep = (ms) => {
   return new Promise((resolve) => setTimeout(resolve, ms));
 };
 
-const logger = winston.createLogger({
-  level: "info",
-  format: winston.format.combine(
-    winston.format.timestamp({
-      format: "YYYY-MM-DD HH:mm:ss",
-    }),
-    winston.format.printf(
-      (info) => `${info.timestamp} ${info.level}: ${info.message}`
-    )
-  ),
-  transports: [
-    new winston.transports.Console(),
-    new winston.transports.File({ filename: "trading-bot.log" }),
-  ],
-});
-
-class TradingBot {
+class TradingBot extends EventEmitter {
   constructor() {
+    super(); 
     this.walletAmountCache = new Map(); // mint => { amount, timestamp }
     this.walletCacheTTL = 60000; // 1 minute
     this.config = {
@@ -76,99 +70,6 @@ class TradingBot {
     this.targetList = [];
 
     this.connection = new Connection(this.config.rpcUrl);
-  }
-
-  async initialize() {
-    this.keypair = Keypair.fromSecretKey(bs58.decode ? bs58.decode (this.privateKey): bs58.default.decode(this.privateKey));
-    this.solanaTracker = new SolanaTracker(this.keypair, this.config.rpcUrl);
-    await this.loadPositions();
-    await this.validatePositions();
-    await this.loadSoldPositions();
-    await this.loadTargetList();
-  }
-
-  // Fetches trending tokens for the timeframe set in .env
-  async fetchTokens() {
-    try {
-      const response = await session.get(`/tokens/trending/${this.config.trendingtimeframe}`);
-      return response.data;
-    } catch (error) {
-      logger.error("Error fetching trending token data", {
-        message: error.message,
-        response: error.response?.data,
-        stack: error.stack,
-      });
-      return [];
-    }
-  }
-
-  async fetchTokenData(tokenId) {
-    const maxRetries = 3;
-    let attempt = 0;
-    while (attempt <= maxRetries) {
-      try {
-        const response = await session.get(`/tokens/${tokenId}`);
-        return response.data;
-      } catch (error) {
-        if (error.response && error.response.status === 429) {
-          const backoff = 5000 * Math.pow(2, attempt); // 5s, 10s, 20s...
-          logger.warn(`Rate limited on fetchTokenData for token ${tokenId}, attempt ${attempt + 1}. Retrying in ${backoff} ms.`);
-          await sleep(backoff);
-          attempt++;
-        } else {
-          logger.error("Error fetching token data", {
-            message: error.message,
-            response: error.response?.data,
-            stack: error.stack,
-          });
-          return null;
-        }
-      }
-    }
-    logger.error(`Failed to fetch token data for token ${tokenId} after ${maxRetries} retries.`);
-    return null;
-  }
-  async createIndicators(chartData) {
-    const tokenEMA = ema()
-  }
-
-  async getTokenChart(tokenId) {
-    const maxRetries = 3;
-    let attempt = 0;
-    while (attempt <= maxRetries) {
-      try {
-        // This is the candlestick API
-        // https://docs.solanatracker.io/public-data-api/docs#get-charttoken-1
-        const response = await session.get(`/chart/${tokenId}/1m`);
-        const chartData = response.data;
-        // Update target list entry with chart data if it exists
-        const targetEntry = this.targetList.find(entry => entry.contract === tokenId);
-        if (targetEntry) {
-          targetEntry.chartData = chartData; // Overwrites any previous data
-          await this.saveTargetList();
-          logger.info(`Updated target list entry for token ${tokenId} with chart data.`);
-        } else {
-          logger.warn(`No target list entry found for token ${tokenId}.`);
-        }
-        return chartData;
-      } catch (error) {
-        if (error.response && error.response.status === 429) {
-          const backoff = 5000 * Math.pow(2, attempt); // 5s, 10s, 20s...
-          logger.warn(`Rate limited on getTokenChart for token ${tokenId}, attempt ${attempt + 1}. Retrying in ${backoff} ms.`);
-          await sleep(backoff);
-          attempt++;
-        } else {
-          logger.error("Error fetching token chart", {
-            message: error.message,
-            response: error.response?.data,
-            stack: error.stack,
-          });
-          return null;
-        }
-      }
-    }
-    logger.error(`Failed to fetch token chart for token ${tokenId} after ${maxRetries} retries.`);
-    return null;
   }
 
   filterTokens(tokens) {
@@ -458,82 +359,6 @@ class TradingBot {
     return shouldSell;
   }
 
-  async buyMonitor() {
-    while (true) {
-      const currentActive = this.positions.size;
-      const maxActive = this.config.maxActivePositions;
-      if (currentActive < maxActive) {
-        const openSlots = maxActive - currentActive;
-
-        // Step 1: Fetch tokens from API and filter them
-        const tokens = await this.fetchTokens();
-        const filteredTokens = this.filterTokens(tokens);
-
-        // Step 2: Add each filtered token to the target list if not already present, with default status "hold"
-        for (const token of filteredTokens) {
-          if (this.targetList.length >= 10) break;  // Limit the target list to 10 coins
-          let targetEntry = this.targetList.find(entry => entry.contract === token.token.mint || entry.symbol === token.token.symbol);
-          if (!targetEntry) {
-            targetEntry = {
-              symbol: token.token.symbol,
-              contract: token.token.mint,
-              status: "hold",
-              chartData: {}
-            };
-            this.targetList.push(targetEntry);
-          }
-        }
-
-        // Save the updated target list
-        await this.saveTargetList();
-
-        // Step 3: For each target list entry, update chart data and evaluate trade
-        for (const targetEntry of this.targetList) {
-          // Update chart data for the token
-          await this.getTokenChart(targetEntry.contract);
-          // Evaluate trade and update status accordingly:
-          // If evaluateTrade returns true, mark as "target", else leave as "hold"
-          targetEntry.status = this.evaluateTrade(targetEntry) ? "target" : "hold";
-        }
-        // Save the target list after evaluation
-        await this.saveTargetList();
-
-        // Step 4: Attempt to buy tokens from the target list that are marked as "target"
-        let attempts = 0;
-        for (const targetEntry of this.targetList) {
-          if (attempts >= openSlots) break;
-          if (targetEntry.status === "target") {
-            // Fetch token data for this entry so we can execute the swap
-            const tokenData = await this.fetchTokenData(targetEntry.contract);
-            if (tokenData && !this.positions.has(targetEntry.contract) && !this.buyingTokens.has(targetEntry.contract)) {
-              this.buyingTokens.add(targetEntry.contract);
-              this.performSwap({ token: tokenData }, true).catch((error) => {
-                logger.error("Error buying token", {
-                  message: error.message,
-                  response: error.response?.data,
-                  stack: error.stack,
-                });
-                this.buyingTokens.delete(targetEntry.contract);
-              });
-              attempts++;
-            }
-          }
-        }
-      }
-      await sleep(this.config.delay);
-    }
-  }
-
-  async positionMonitor() {
-    while (true) {
-      const positionPromises = Array.from(this.positions.keys()).map(
-        (tokenMint) => this.checkAndSellPosition(tokenMint)
-      );
-      await Promise.allSettled(positionPromises);
-      await sleep(this.config.monitorInterval);
-    }
-  }
-
   buildSwapOptions() {
     return {
       sendOptions: { skipPreflight: true },
@@ -575,7 +400,7 @@ class TradingBot {
         this.soldPositionsFile,
         JSON.stringify(this.soldPositions, null, 2)
       );
-      logger.info(`Saved ${this.soldPositions.length} sold positions to file`);
+        logger.info(`Saved ${this.soldPositions.length} sold positions to file`);
     } catch (error) {
       logger.error("Error saving sold positions", { error });
     }
@@ -750,16 +575,21 @@ class TradingBot {
   }
 
   async start() {
-    try {
-    logger.info("Starting Trading Bot");
-    await this.initialize();
-    this.startHeartbeat();
+    logger.info("🚀 Starting Trading Bot...");
 
-    // Run buying and selling loops concurrently
-    await Promise.allSettled([this.buyMonitor(), this.positionMonitor()]);
-    } catch (error) {
-      console.log("Error starting bot", error);
-    }
+    this.once('startup:complete', () => {
+      logger.info("🟢 Startup complete. Launching operations...");
+      this.startHeartbeat();
+      require("./bot/BuyOps").start(this);
+      require("./bot/SellOps").start(this);
+    });
+
+    this.once('startup:error', (err) => {
+      logger.error("🔥 Startup failed. Exiting.", { error: err });
+      process.exit(1);
+    });
+
+    await runStartup(this);
   }
 }
 
