@@ -33,8 +33,7 @@ async function monitorPositions(bot) {
 
                     bot.sellingPositions.add(mint);
 
-                    const tokenData = await fetchTokenDetails(mint); // Optional, for more accurate metadata
-                    const txid = await bot.performSwap({ token: tokenData }, false);
+                    const txid = await bot.performSwap({ token: entry }, false);
 
                     if (txid) {
                         entry.status = "sold";

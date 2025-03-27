@@ -1,7 +1,6 @@
 const { calculateIndicators } = require("../lib/indicators");
 const {
     fetchTrendingTokens,
-    fetchTokenDetails,
     fetchChartData,
 } = require("../lib/solanaTrackerAPI");
 
@@ -77,19 +76,14 @@ async function buyMonitor(bot) {
                 if (buys >= openSlots) break;
                 if (entry.status !== "target") continue;
 
-                const tokenData = await fetchTokenDetails(entry.contract);
-
                 if (
-                    tokenData &&
                     !bot.positions.has(entry.contract) &&
                     !bot.buyingTokens.has(entry.contract)
                 ) {
                     bot.buyingTokens.add(entry.contract);
-
-                    bot.performSwap({ token: tokenData }, true).catch((err) => {
+                    bot.performSwap({ token: entry }, true).catch((err) => {
                         logger.error("Buy failed", { token: entry.symbol, error: err });
                     });
-
                     buys++;
                 }
             }

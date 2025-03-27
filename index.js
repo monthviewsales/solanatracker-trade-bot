@@ -9,11 +9,8 @@ const fs = require("fs").promises;
 // API Work
 const {
   fetchTrendingTokens,
-  fetchTokenDetails,
   fetchChartData,
 } = require('./lib/solanaTrackerAPI');
-
-const { EMA, RSI, BollingerBands } = require("technicalindicators");
 
 const EventEmitter = require('events');
 const runStartup = require('./bot/StartupManager');
@@ -282,83 +279,6 @@ class TradingBot extends EventEmitter {
     }
   }
 
-  evaluateSell(targetEntry, position) {
-    const chart = targetEntry.chartData?.oclhv;
-    if (!chart || chart.length < 20) return false;
-
-    const closes = chart.map(c => c.close);
-    const price = closes[closes.length - 1];
-
-    // Calculate technical indicators
-    const emaShort = EMA.calculate({ period: 5, values: closes });
-    const emaMedium = EMA.calculate({ period: 20, values: closes });
-    const rsi = RSI.calculate({ period: 14, values: closes });
-    const bb = BollingerBands.calculate({ period: 14, stdDev: 2, values: closes });
-
-    if (emaShort.length < 1 || emaMedium.length < 1 || rsi.length < 1 || bb.length < 1) return false;
-
-    const latestEmaShort = emaShort[emaShort.length - 1];
-    const latestEmaMedium = emaMedium[emaMedium.length - 1];
-    const latestRsi = rsi[rsi.length - 1];
-    const latestBB = bb[bb.length - 1];
-
-    // Pull configurable sell thresholds
-    const rsiSellThreshold = parseFloat(process.env.RSI_SELL_THRESHOLD) || 70;
-    const sellMargin = parseFloat(process.env.SELL_MARGIN) || 0;
-    const trailingStopPercent = parseFloat(process.env.TRAILING_STOP_PERCENT) || 0.05;
-    const trailingTPPercent = parseFloat(process.env.TRAILING_TP_PERCENT) || 0.10;
-
-    // Adjust thresholds using margin
-    const emaSellTarget = latestEmaMedium * (1 + sellMargin);
-    const rsiTarget = rsiSellThreshold * (1 - sellMargin);
-
-    // Indicator-based sell signals
-    const emaReversal = latestEmaShort <= emaSellTarget;
-    const upperBandExit = price > latestBB.upper;
-    const rsiOverbought = latestRsi >= rsiTarget;
-
-    // Trailing stop loss: sell if price falls from peak
-    let trailingStopHit = false;
-    if (position?.highestPrice && position.highestPrice > 0) {
-      const trailingStop = position.highestPrice * (1 - trailingStopPercent);
-      trailingStopHit = price < trailingStop;
-    }
-
-    // Trailing take profit: update peak and sell if drop exceeds percent
-    let trailingTPHit = false;
-    if (position?.highestPrice && price > position.highestPrice) {
-      position.highestPrice = price; // Update high watermark
-    }
-    if (position?.highestPrice && position.highestPrice > 0) {
-      const trailingTP = position.highestPrice * (1 - trailingTPPercent);
-      trailingTPHit = price < trailingTP;
-    }
-
-    // Hard stop loss: if price falls below manual stop
-    const priceBelowStop = position && position.sl && price <= position.sl;
-
-    // Combine conditions
-    const sellCondition1 = priceBelowStop || trailingStopHit || trailingTPHit;
-    const sellCondition2 = emaReversal || upperBandExit;
-    const sellCondition3 = rsiOverbought;
-
-    const shouldSell = sellCondition1 || (sellCondition2 && sellCondition3);
-
-    // Logging for insights
-    if (shouldSell) {
-      logger.info(`Sell signal for ${position.symbol}: 
-    price=${price.toFixed(6)}, 
-    highest=${position.highestPrice?.toFixed(6)}, 
-    trailingTPHit=${trailingTPHit}, 
-    stopHit=${priceBelowStop}, 
-    trailingSLHit=${trailingStopHit}, 
-    EMA_Reversal=${emaReversal}, 
-    RSI=${latestRsi.toFixed(2)}`);
-    }
-
-    return shouldSell;
-  }
-
   buildSwapOptions() {
     return {
       sendOptions: { skipPreflight: true },
@@ -437,52 +357,6 @@ class TradingBot extends EventEmitter {
         logger.error("Error loading target list", { error });
       }
     }
-  }
-
-  evaluateTrade(targetEntry) {
-    const chart = targetEntry.chartData?.oclhv;
-    if (!chart || chart.length < 20) return false;
-
-    const closes = chart.map(c => c.close);
-    const price = closes[closes.length - 1];
-
-    const emaShort = EMA.calculate({ period: 5, values: closes });
-    const emaMedium = EMA.calculate({ period: 20, values: closes });
-    const rsi = RSI.calculate({ period: 14, values: closes });
-    const bb = BollingerBands.calculate({ period: 14, stdDev: 2, values: closes });
-
-    if (emaMedium.length < 2 || rsi.length < 1 || bb.length < 1) return false;
-
-    const latestEmaShort = emaShort[emaShort.length - 1];
-    const latestEmaMedium = emaMedium[emaMedium.length - 1];
-    const prevEmaMedium = emaMedium[emaMedium.length - 2];
-    const latestRsi = rsi[rsi.length - 1];
-    const latestBB = bb[bb.length - 1];
-
-    const trendBias = latestEmaMedium > prevEmaMedium;
-
-    // Configs from environment (default values as fallback)
-    const rsiBuyThreshold = parseFloat(process.env.RSI_BUY_THRESHOLD) || 35;
-    const buyMargin = parseFloat(process.env.BUY_MARGIN) || 0;
-    const tradingMode = process.env.TRADING_MODE || "normal";
-    const logicMode = tradingMode === "degen" ? "loose" : "strict";
-
-    const bbTarget = latestBB.lower * (1 + buyMargin);
-    const rsiTarget = rsiBuyThreshold * (1 + buyMargin);
-
-    let finalBuyDecision = false;
-
-    if (tradingMode === "degen") {
-      if (logicMode === "loose") {
-        finalBuyDecision = trendBias && (price <= bbTarget || latestRsi <= rsiTarget);
-      } else {
-        finalBuyDecision = trendBias && price <= bbTarget && latestRsi <= rsiTarget;
-      }
-    } else {
-      finalBuyDecision = price <= bbTarget && latestRsi <= rsiBuyThreshold;
-    }
-
-    return finalBuyDecision;
   }
   
   async loadPositions() {
