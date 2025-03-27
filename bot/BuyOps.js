@@ -51,6 +51,7 @@ async function buyMonitor(bot) {
             // Chart data + indicators + evaluate signals
             for (const entry of CoinStore.getAll()) {
                 if (entry.status === "hold") {
+                    await sleep(250); // ← throttle to 4 per second
                     const chartData = await fetchChartData(entry.contract);
                     entry.chartData = chartData;
 
@@ -58,9 +59,7 @@ async function buyMonitor(bot) {
                     if (indicators) {
                         entry.indicators = indicators;
                         const isBuy = evaluateTrade(entry, config);
-                        if (isBuy) {
-                            entry.status = "target";
-                        }
+                        if (isBuy) entry.status = "target";
                     } else {
                         logger.warn(`[BuyOps] Not enough data to calculate indicators for ${entry.symbol}`);
                     }
