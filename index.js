@@ -6,6 +6,8 @@ const winston = require("winston");
 const chalk = require("chalk");
 const axios = require("axios");
 const fs = require("fs").promises;
+// const { ema, bbands, stochrsi } = require("@ixjb94/indicators-js");
+const { EMA, RSI, BollingerBands } = require("technicalindicators");
 
 const session = axios.create({
   baseURL: "https://data.solanatracker.io/",
@@ -101,56 +103,72 @@ class TradingBot {
   }
 
   async fetchTokenData(tokenId) {
-    try {
-      const response = await session.get(`/tokens/${tokenId}`);
-      return response.data;
-    } catch (error) {
-      logger.error("Error fetching token data", {
-        message: error.message,
-        response: error.response?.data,
-        stack: error.stack,
-      });
-      return null
+    const maxRetries = 3;
+    let attempt = 0;
+    while (attempt <= maxRetries) {
+      try {
+        const response = await session.get(`/tokens/${tokenId}`);
+        return response.data;
+      } catch (error) {
+        if (error.response && error.response.status === 429) {
+          const backoff = 5000 * Math.pow(2, attempt); // 5s, 10s, 20s...
+          logger.warn(`Rate limited on fetchTokenData for token ${tokenId}, attempt ${attempt + 1}. Retrying in ${backoff} ms.`);
+          await sleep(backoff);
+          attempt++;
+        } else {
+          logger.error("Error fetching token data", {
+            message: error.message,
+            response: error.response?.data,
+            stack: error.stack,
+          });
+          return null;
+        }
+      }
     }
+    logger.error(`Failed to fetch token data for token ${tokenId} after ${maxRetries} retries.`);
+    return null;
+  }
+  async createIndicators(chartData) {
+    const tokenEMA = ema()
   }
 
   async getTokenChart(tokenId) {
-    try {
-      // This is the candlestick API
-      // https://docs.solanatracker.io/public-data-api/docs#get-charttoken-1
-      const response = await session.get(`/chart/${tokenId}/1m`);
-      // The API response now looks like:
-      // {
-      //   "oclhv": [
-      //     {
-      //       "open": 0.011223689525154462,
-      //       "close": 0.011223689525154462,
-      //       "low": 0.011223689525154462,
-      //       "high": 0.011223689525154462,
-      //       "volume": 683.184501136,
-      //       "time": 1722514489
-      //     }
-      //   ]
-      // }
-      const chartData = response.data;
-      // Update target list entry with chart data if it exists
-      const targetEntry = this.targetList.find(entry => entry.contract === tokenId);
-      if (targetEntry) {
-        targetEntry.chartData = chartData;
-        await this.saveTargetList();
-        logger.info(`Updated target list entry for token ${tokenId} with chart data.`);
-      } else {
-        logger.warn(`No target list entry found for token ${tokenId}.`);
+    const maxRetries = 3;
+    let attempt = 0;
+    while (attempt <= maxRetries) {
+      try {
+        // This is the candlestick API
+        // https://docs.solanatracker.io/public-data-api/docs#get-charttoken-1
+        const response = await session.get(`/chart/${tokenId}/1m`);
+        const chartData = response.data;
+        // Update target list entry with chart data if it exists
+        const targetEntry = this.targetList.find(entry => entry.contract === tokenId);
+        if (targetEntry) {
+          targetEntry.chartData = chartData; // Overwrites any previous data
+          await this.saveTargetList();
+          logger.info(`Updated target list entry for token ${tokenId} with chart data.`);
+        } else {
+          logger.warn(`No target list entry found for token ${tokenId}.`);
+        }
+        return chartData;
+      } catch (error) {
+        if (error.response && error.response.status === 429) {
+          const backoff = 5000 * Math.pow(2, attempt); // 5s, 10s, 20s...
+          logger.warn(`Rate limited on getTokenChart for token ${tokenId}, attempt ${attempt + 1}. Retrying in ${backoff} ms.`);
+          await sleep(backoff);
+          attempt++;
+        } else {
+          logger.error("Error fetching token chart", {
+            message: error.message,
+            response: error.response?.data,
+            stack: error.stack,
+          });
+          return null;
+        }
       }
-      return chartData;
-    } catch (error) {
-      logger.error("Error fetching token chart", {
-        message: error.message,
-        response: error.response?.data,
-        stack: error.stack,
-      });
-      return null;
     }
+    logger.error(`Failed to fetch token chart for token ${tokenId} after ${maxRetries} retries.`);
+    return null;
   }
 
   filterTokens(tokens) {
@@ -248,32 +266,39 @@ class TradingBot {
   }
 
   async performSwap(token, isBuy) {
+    // Use token.token if available; otherwise, fallback to token directly.
+    const tokenInfo = token.token || token;
+    if (!tokenInfo?.symbol || !tokenInfo?.mint) {
+      logger.error("Invalid tokenInfo passed to performSwap", { token });
+      return false;
+    }
     logger.info(
-      `${
-        isBuy ? chalk.white("[BUYING]") : chalk.white("[SELLING]")
-      } [${this.keypair.publicKey.toBase58()}] [${token.token.symbol}] [${
-        token.token.mint
-      }]`
+      `${isBuy ? chalk.white("[BUYING]") : chalk.white("[SELLING]")
+      } [${this.keypair.publicKey.toBase58()}] [${tokenInfo.symbol}] [${tokenInfo.mint}]`
     );
+
     const { amount, slippage, priorityFee } = this.config;
+    // Determine the swap tokens based on buy or sell.
     const [fromToken, toToken] = isBuy
-      ? [this.SOL_ADDRESS, token.token.mint]
-      : [token.token.mint, this.SOL_ADDRESS];
+      ? [this.SOL_ADDRESS, tokenInfo.mint]
+      : [tokenInfo.mint, this.SOL_ADDRESS];
+    const poolData = token.pools ? token.pools[0] : null;
 
     try {
       let swapAmount;
       if (isBuy) {
         swapAmount = amount;
       } else {
-        const position = this.positions.get(token.token.mint);
+        const position = this.positions.get(tokenInfo.mint);
         if (!position) {
           logger.error(
-            `No position found for ${token.token.symbol} when trying to sell`
+            `No position found for ${tokenInfo.symbol} when trying to sell`
           );
           return false;
         }
         swapAmount = position.amount;
       }
+
 
       const swapResponse = await this.solanaTracker.getSwapInstructions(
         fromToken,
@@ -289,32 +314,30 @@ class TradingBot {
         swapResponse,
         swapOptions
       );
-      this.logTransaction(txid, isBuy, token);
+      this.logTransaction(txid, isBuy, { token: tokenInfo });
 
       if (isBuy) {
         const tokenAmount = await this.getWalletAmount(
           this.keypair.publicKey.toBase58(),
-          token.token.mint
+          tokenInfo.mint
         );
         if (!tokenAmount) {
-          logger.error(
-            `Swap failed ${token.token.mint}`
-          );
+          logger.error(`Swap failed for ${tokenInfo.mint}`);
           return false;
         }
-        this.positions.set(token.token.mint, {
+        this.positions.set(tokenInfo.mint, {
           txid,
-          symbol: token.token.symbol,
-          entryPrice: token.pools[0].price.quote,
+          symbol: tokenInfo.symbol,
+          entryPrice: poolData ? poolData.price.quote : 0,
           amount: tokenAmount,
           openTime: Date.now(),
         });
-        this.seenTokens.add(token.token.mint);
-        this.buyingTokens.delete(token.token.mint);
+        this.seenTokens.add(tokenInfo.mint);
+        this.buyingTokens.delete(tokenInfo.mint);
       } else {
-        const position = this.positions.get(token.token.mint);
+        const position = this.positions.get(tokenInfo.mint);
         if (position) {
-          const exitPrice = token.pools[0].price.quote;
+          const exitPrice = poolData ? poolData.price.quote : 0;
           const pnl = (exitPrice - position.entryPrice) * position.amount;
           const pnlPercentage =
             (pnl / (position.entryPrice * position.amount)) * 100;
@@ -329,88 +352,110 @@ class TradingBot {
           };
 
           this.soldPositions.push(soldPosition);
-
           logger.info(
-            `Closed position for ${token.token.symbol}. PnL: (${pnlPercentage.toFixed(2)}%)`
+            `Closed position for ${tokenInfo.symbol}. PnL: (${pnlPercentage.toFixed(2)}%)`
           );
-          this.positions.delete(token.token.mint);
-          this.sellingPositions.delete(token.token.mint);
-
+          this.positions.delete(tokenInfo.mint);
+          this.sellingPositions.delete(tokenInfo.mint);
           await this.saveSoldPositions();
         }
       }
 
       await this.savePositions();
-      this.walletAmountCache.delete(token.token.mint);
+      this.walletAmountCache.delete(tokenInfo.mint);
       return txid;
     } catch (error) {
-      logger.error(`Swap failed for ${isBuy ? "buy" : "sell"} [${token.token.symbol}] [${token.token.mint}]`, {
+      logger.error(`Swap failed for ${isBuy ? "buy" : "sell"} [${tokenInfo.symbol}] [${tokenInfo.mint}]`, {
         message: error.message,
         response: error.response?.data,
         stack: error.stack,
-        poolData: token.pools?.[0] || "No pool data",
+      poolData: poolData ? poolData : "No pool data",
       });
       logger.debug(`Full token data on swap failure: ${JSON.stringify(token, null, 2)}`);
       if (isBuy) {
-        this.buyingTokens.delete(token.token.mint);
+        this.buyingTokens.delete(tokenInfo.mint);
       } else {
-        this.sellingPositions.delete(token.token.mint);
+        this.sellingPositions.delete(tokenInfo.mint);
       }
       return false;
     }
   }
 
-  async checkAndSellPosition(tokenMint) {
-    if (this.sellingPositions.has(tokenMint)) {
-    //  logger.info(`Already selling position for ${tokenMint}, skipping`);
-      return;
+  evaluateSell(targetEntry, position) {
+    const chart = targetEntry.chartData?.oclhv;
+    if (!chart || chart.length < 20) return false;
+
+    const closes = chart.map(c => c.close);
+    const price = closes[closes.length - 1];
+
+    // Calculate technical indicators
+    const emaShort = EMA.calculate({ period: 5, values: closes });
+    const emaMedium = EMA.calculate({ period: 20, values: closes });
+    const rsi = RSI.calculate({ period: 14, values: closes });
+    const bb = BollingerBands.calculate({ period: 14, stdDev: 2, values: closes });
+
+    if (emaShort.length < 1 || emaMedium.length < 1 || rsi.length < 1 || bb.length < 1) return false;
+
+    const latestEmaShort = emaShort[emaShort.length - 1];
+    const latestEmaMedium = emaMedium[emaMedium.length - 1];
+    const latestRsi = rsi[rsi.length - 1];
+    const latestBB = bb[bb.length - 1];
+
+    // Pull configurable sell thresholds
+    const rsiSellThreshold = parseFloat(process.env.RSI_SELL_THRESHOLD) || 70;
+    const sellMargin = parseFloat(process.env.SELL_MARGIN) || 0;
+    const trailingStopPercent = parseFloat(process.env.TRAILING_STOP_PERCENT) || 0.05;
+    const trailingTPPercent = parseFloat(process.env.TRAILING_TP_PERCENT) || 0.10;
+
+    // Adjust thresholds using margin
+    const emaSellTarget = latestEmaMedium * (1 + sellMargin);
+    const rsiTarget = rsiSellThreshold * (1 - sellMargin);
+
+    // Indicator-based sell signals
+    const emaReversal = latestEmaShort <= emaSellTarget;
+    const upperBandExit = price > latestBB.upper;
+    const rsiOverbought = latestRsi >= rsiTarget;
+
+    // Trailing stop loss: sell if price falls from peak
+    let trailingStopHit = false;
+    if (position?.highestPrice && position.highestPrice > 0) {
+      const trailingStop = position.highestPrice * (1 - trailingStopPercent);
+      trailingStopHit = price < trailingStop;
     }
 
-    const position = this.positions.get(tokenMint);
-    if (!position) return;
-
-    const tokenData = await this.fetchTokenData(tokenMint);
-    if (!tokenData) {
-      logger.error(`Failed to fetch data for token ${tokenMint} (checkAndSellPosition)`);
-      return;
+    // Trailing take profit: update peak and sell if drop exceeds percent
+    let trailingTPHit = false;
+    if (position?.highestPrice && price > position.highestPrice) {
+      position.highestPrice = price; // Update high watermark
+    }
+    if (position?.highestPrice && position.highestPrice > 0) {
+      const trailingTP = position.highestPrice * (1 - trailingTPPercent);
+      trailingTPHit = price < trailingTP;
     }
 
-    const currentPrice = tokenData.pools[0].price.quote;
-    const pnlPercentage =
-      ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
+    // Hard stop loss: if price falls below manual stop
+    const priceBelowStop = position && position.sl && price <= position.sl;
 
-    logger.info(
-      `PnL for position [${position.symbol}] [${chalk[
-        pnlPercentage > 0 ? "green" : "red"
-      ](pnlPercentage.toFixed(2))}%]`
-    );
+    // Combine conditions
+    const sellCondition1 = priceBelowStop || trailingStopHit || trailingTPHit;
+    const sellCondition2 = emaReversal || upperBandExit;
+    const sellCondition3 = rsiOverbought;
 
-    if (
-      pnlPercentage <= this.config.maxNegativePnL ||
-      pnlPercentage >= this.config.maxPositivePnL
-    ) {
-      const currentAmount = await this.getWalletAmount(
-        this.keypair.publicKey.toBase58(),
-        tokenMint
-      );
-      if (currentAmount !== null && currentAmount > 0) {
-        this.sellingPositions.add(tokenMint);
-        this.performSwap(tokenData, false).catch((error) => {
-          logger.error("Error selling position", {
-            message: error.message,
-            response: error.response?.data,
-            stack: error.stack,
-          });
-          this.sellingPositions.delete(tokenMint);
-        });
-      } else {
-        logger.warn(
-          `No balance found for ${position.symbol}, removing from positions`
-        );
-        this.positions.delete(tokenMint);
-        await this.savePositions();
-      }
+    const shouldSell = sellCondition1 || (sellCondition2 && sellCondition3);
+
+    // Logging for insights
+    if (shouldSell) {
+      logger.info(`Sell signal for ${position.symbol}: 
+    price=${price.toFixed(6)}, 
+    highest=${position.highestPrice?.toFixed(6)}, 
+    trailingTPHit=${trailingTPHit}, 
+    stopHit=${priceBelowStop}, 
+    trailingSLHit=${trailingStopHit}, 
+    EMA_Reversal=${emaReversal}, 
+    RSI=${latestRsi.toFixed(2)}`);
     }
+
+    return shouldSell;
   }
 
   async buyMonitor() {
@@ -426,6 +471,7 @@ class TradingBot {
 
         // Step 2: Add each filtered token to the target list if not already present, with default status "hold"
         for (const token of filteredTokens) {
+          if (this.targetList.length >= 10) break;  // Limit the target list to 10 coins
           let targetEntry = this.targetList.find(entry => entry.contract === token.token.mint || entry.symbol === token.token.symbol);
           if (!targetEntry) {
             targetEntry = {
@@ -437,6 +483,7 @@ class TradingBot {
             this.targetList.push(targetEntry);
           }
         }
+
         // Save the updated target list
         await this.saveTargetList();
 
@@ -568,12 +615,49 @@ class TradingBot {
   }
 
   evaluateTrade(targetEntry) {
-    // TODO: Implement advanced trading algorithm logic using targetEntry.chartData.
-    // For now, if chartData.oclhv exists and has data, mark as "target"; otherwise, "hold".
-    if (targetEntry.chartData && targetEntry.chartData.oclhv && targetEntry.chartData.oclhv.length > 0) {
-      return true; // Indicates the token qualifies to be marked as "target"
+    const chart = targetEntry.chartData?.oclhv;
+    if (!chart || chart.length < 20) return false;
+
+    const closes = chart.map(c => c.close);
+    const price = closes[closes.length - 1];
+
+    const emaShort = EMA.calculate({ period: 5, values: closes });
+    const emaMedium = EMA.calculate({ period: 20, values: closes });
+    const rsi = RSI.calculate({ period: 14, values: closes });
+    const bb = BollingerBands.calculate({ period: 14, stdDev: 2, values: closes });
+
+    if (emaMedium.length < 2 || rsi.length < 1 || bb.length < 1) return false;
+
+    const latestEmaShort = emaShort[emaShort.length - 1];
+    const latestEmaMedium = emaMedium[emaMedium.length - 1];
+    const prevEmaMedium = emaMedium[emaMedium.length - 2];
+    const latestRsi = rsi[rsi.length - 1];
+    const latestBB = bb[bb.length - 1];
+
+    const trendBias = latestEmaMedium > prevEmaMedium;
+
+    // Configs from environment (default values as fallback)
+    const rsiBuyThreshold = parseFloat(process.env.RSI_BUY_THRESHOLD) || 35;
+    const buyMargin = parseFloat(process.env.BUY_MARGIN) || 0;
+    const tradingMode = process.env.TRADING_MODE || "normal";
+    const logicMode = tradingMode === "degen" ? "loose" : "strict";
+
+    const bbTarget = latestBB.lower * (1 + buyMargin);
+    const rsiTarget = rsiBuyThreshold * (1 + buyMargin);
+
+    let finalBuyDecision = false;
+
+    if (tradingMode === "degen") {
+      if (logicMode === "loose") {
+        finalBuyDecision = trendBias && (price <= bbTarget || latestRsi <= rsiTarget);
+      } else {
+        finalBuyDecision = trendBias && price <= bbTarget && latestRsi <= rsiTarget;
+      }
+    } else {
+      finalBuyDecision = price <= bbTarget && latestRsi <= rsiBuyThreshold;
     }
-    return false; // Remains "hold"
+
+    return finalBuyDecision;
   }
   
   async loadPositions() {
