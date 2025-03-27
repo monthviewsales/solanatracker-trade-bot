@@ -7,3 +7,8 @@ sold_positions.json
 .flaskenv*
 !.env.project
 !.env.vault
+target_list.json
+
+coins.json
+
+*.json

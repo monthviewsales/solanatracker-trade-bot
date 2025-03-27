@@ -51,18 +51,44 @@ async function buyMonitor(bot) {
             // Chart data + indicators + evaluate signals
             for (const entry of CoinStore.getAll()) {
                 if (entry.status === "hold") {
-                    await sleep(250); // ← throttle to 4 per second
-                    const chartData = await fetchChartData(entry.contract);
-                    entry.chartData = chartData;
+                    await sleep(50); // back to fast mode now that rate limiter is lifted
+                    const rawChartData = await fetchChartData(entry.contract);
+                    const chartData = rawChartData.oclhv || [];
+                    
+                    // Store only the latest 50 candles to keep coins.json lean and performant.
+                    // This is enough for indicators like RSI, EMA, and BB without bloating the file.
+                    if (!Array.isArray(chartData) || chartData.length === 0) {
+                        logger.warn(`[BuyOps] Invalid or empty chart data for ${entry.symbol}`);
+                        CoinStore.addOrUpdate(entry);
+                        continue;
+                    }
 
-                    const indicators = calculateIndicators(chartData?.oclhv);
-                    if (indicators) {
+                    const trimmedChart = chartData.slice(-50);
+                    entry.chartData = { oclhv: trimmedChart };
+
+                    if (!chartData || chartData.length < 20) {
+                        entry.chartData = { oclhv: chartData };
+                        logger.warn(`[BuyOps] Chart data too short for ${entry.symbol} — skipping`);
+                        CoinStore.addOrUpdate(entry);
+                        continue;
+                    }
+
+                    const indicators = calculateIndicators(trimmedChart);
+                    if (!indicators || Object.keys(indicators).length === 0) {
+                        logger.warn(`[BuyOps] Indicator calculation returned null or empty for ${entry.symbol}`);
+                    } else {
+                        logger.debug(`[BuyOps] Indicators for ${entry.symbol}: ${JSON.stringify(indicators)}`);
                         entry.indicators = indicators;
                         const isBuy = evaluateTrade(entry, config);
-                        if (isBuy) entry.status = "target";
-                    } else {
-                        logger.warn(`[BuyOps] Not enough data to calculate indicators for ${entry.symbol}`);
+                        if (isBuy) {
+                            logger.info(`[BuyOps] BUY SIGNAL for ${entry.symbol}`);
+                            entry.status = "target";
+                        } else {
+                            logger.debug(`[BuyOps] Not buying ${entry.symbol}, failed filter check`);
+                        }
                     }
+
+                    CoinStore.addOrUpdate(entry);
                 }
             }
 
