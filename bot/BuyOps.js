@@ -8,6 +8,24 @@ const { filterTokens } = require("../lib/tokenUtils");
 const { evaluateTrade } = require("../lib/indicators");
 const logger = require("../utils/logger");
 
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeTrendingEntry(tokenEntry) {
+    return {
+        token: tokenEntry.token,
+        pools: tokenEntry.pools || [],
+        events: tokenEntry.events || {},
+        risk: tokenEntry.risk || {},
+        buysCount: tokenEntry.buysCount || 0,
+        sellsCount: tokenEntry.sellsCount || 0,
+        status: "hold",
+        chartData: {},
+        indicators: {}
+    };
+}
+
 module.exports = {
     start(bot) {
         buyMonitor(bot);
@@ -37,12 +55,8 @@ async function buyMonitor(bot) {
                 let entry = CoinStore.findByMint(mint);
 
                 if (!entry) {
-                    entry = {
-                        token: token.token,
-                        status: "hold",
-                        chartData: {},
-                    };
-                    CoinStore.addOrUpdate(entry);
+                    const normalized = normalizeTrendingEntry(token);
+                    CoinStore.addOrUpdate(normalized);
                 }
             }
 
@@ -50,7 +64,7 @@ async function buyMonitor(bot) {
 
             // Chart data + indicators + evaluate signals
             for (const entry of CoinStore.getAll()) {
-                if (entry.status !== "hold") continue;
+                //if (entry.status !== "hold") continue;
 
                 if (!entry.token || !entry.token.mint) {
                     logger.warn(`⚠️ [BuyOps] Skipping entry with missing token or mint during evaluation`);
@@ -86,6 +100,7 @@ async function buyMonitor(bot) {
                     logger.debug(`📊 [BuyOps] Indicators for ${entry.token?.symbol || "UNKNOWN"}: ${JSON.stringify(indicators)}`);
                     entry.indicators = indicators;
                     const decision = evaluateTrade(entry, config);
+                    logger.debug(`[BuyOps] evaluateTrade for ${entry.token?.symbol || "UNKNOWN"} returned: ${decision}`);
                     if (!decision) {
                         logger.debug(`⛔ [BuyOps] No buy for ${entry.token?.symbol || "UNKNOWN"} — evaluation returned false`);
                     } else {
@@ -99,11 +114,15 @@ async function buyMonitor(bot) {
             }
 
             await CoinStore.save();
-
+            logger.debug(`[BuyOps] Overwatch.positions size: ${bot.overwatch.positions.size}`);
+            logger.debug(`[BuyOps] Overwatch.positions entries: ${JSON.stringify([...bot.overwatch.positions.entries()])}`);
+            logger.debug(`[BuyOps] buyingTokens: ${JSON.stringify([...bot.buyingTokens])}`);
+            
             // Execute buys
             let buys = 0;
 
             for (const entry of CoinStore.getAll()) {
+                logger.debug(`[BuyOps] Execute buys loop token: ${entry.token.symbol}, status: ${entry.status}`);
                 logger.debug(`[BuyOps] Checking buy eligibility for ${entry.token.symbol}`);
                 if (buys >= openSlots) break;
                 
@@ -114,7 +133,8 @@ async function buyMonitor(bot) {
 
                 const liveData = await fetchChartData(entry.token.mint);
                 const priceNow = liveData?.oclhv?.at(-1)?.close;
-
+                logger.debug(`[BuyOps] ${entry.token.symbol}: fetched priceNow = ${priceNow}`);
+                
                 if (!priceNow) {
                     logger.warn(`⚠️ [BuyOps] No live price for ${entry.token.symbol}, skipping swap.`);
                     continue;
@@ -122,14 +142,16 @@ async function buyMonitor(bot) {
 
                 const analysisPrice = entry.chartData?.oclhv?.at(-1)?.close;
                 const diff = Math.abs(priceNow - analysisPrice) / analysisPrice;
+                logger.debug(`[BuyOps] ${entry.token.symbol}: analysisPrice = ${analysisPrice}, diff = ${diff}`);
 
-                if (diff > config.maxAllowedPriceChange) {
+                // If the token is not already marked as a target and the price difference is too high, skip the swap
+                //if (entry.status !== "target" && diff > config.maxAllowedPriceChange) {
+                    if (diff > config.maxAllowedPriceChange) {
                     logger.warn(`📉 [BuyOps] Live price moved too much for ${entry.token.symbol} (${(diff * 100).toFixed(2)}%) — skipping swap`);
                     continue;
                 }
 
                 const token = entry.token;
-                // const requiredFields = ['mint', 'symbol', 'market'];
                 const requiredFields = ['mint', 'symbol'];
                 const missing = requiredFields.filter(f => !token?.[f]);
 
@@ -138,16 +160,15 @@ async function buyMonitor(bot) {
                     continue;
                 }
 
+                logger.debug(`[BuyOps] Eligibility check for ${entry.token.symbol}: overwatch.positions.has(${entry.token.mint}) = ${bot.overwatch.positions.has(entry.token.mint)}, buyingTokens.has(${entry.token.mint}) = ${bot.buyingTokens.has(entry.token.mint)}`);
+
                 if (
                     !bot.overwatch.positions.has(entry.token.mint) &&
                     !bot.buyingTokens.has(entry.token.mint)
                 ) {
                     logger.debug(`[BuyOps] Attempting swap for ${entry.token.symbol}`);
-                    // Log the state of buyingTokens before adding the token
                     logger.debug(`[BuyOps] buyingTokens before swap: ${[...bot.buyingTokens]}`);
-                    
-                    // Log the arguments being passed to performSwap
-                    logger.debug(`[BuyOps] performSwap args: token = { mint: ${entry.token.mint}, symbol: ${entry.token.symbol} }, isBuy: true, overwatch keys: ${Object.keys(bot.overwatch).join(", ")}`);
+                    logger.debug(`[BuyOps] performSwap args: token = { mint: ${entry.token.mint}, symbol: ${entry.token.symbol} }, isBuy: true, overwatch keys: ${Object.keys(bot.overwatch).join(",")}`);
                     
                     bot.buyingTokens.add(entry.token.mint);
                     
@@ -175,8 +196,4 @@ async function buyMonitor(bot) {
 
         await sleep(config.delay);
     }
-}
-
-function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
 }

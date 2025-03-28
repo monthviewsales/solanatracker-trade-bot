@@ -25,8 +25,13 @@ async function monitorPositions(bot) {
                     const chart = await fetchChartData(entry.token.mint);
                     entry.chartData = chart;
 
-                    const indicators = calculateIndicators(chart?.oclhv);
+                    const indicators = calculateIndicators(chart?.ohlcv);
                     entry.indicators = indicators;
+
+                    if (!chart || !chart.ohlcv || !indicators) {
+                        logger.warn(`[SellOps] Skipping ${entry.token.symbol} — invalid chart or indicators`);
+                        return;
+                    }
 
                     const shouldSell = evaluateSell(entry, position, config);
                     if (!shouldSell) {
@@ -41,8 +46,7 @@ async function monitorPositions(bot) {
                     }
 
                     const token = entry.token;
-                    const requiredFields = ['mint', 'symbol'];
-                    // const requiredFields = ['mint', 'symbol', 'market'];
+                    const requiredFields = ['mint', 'symbol', 'market'];
                     const missing = requiredFields.filter(f => !token?.[f]);
 
                     if (missing.length > 0) {
@@ -56,9 +60,9 @@ async function monitorPositions(bot) {
                     const txid = await bot.swapManager.performSwap({ token: entry.token }, false, bot.overwatch);
 
                     if (txid) {
-                        entry.status = "sold";
+                        entry.status = "closed";
                         entry.sold = {
-                            exitPrice: chart.oclhv?.at(-1)?.close || 0,
+                            exitPrice: chart.ohlcv?.at(-1)?.close || 0,
                             pnl: calculatePnL(entry),
                             pnlPercentage: calculatePnL(entry, true),
                             closeTime: Date.now(),

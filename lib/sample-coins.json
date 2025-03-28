@@ -1,5 +1,3 @@
-
-
 {
   "token": {
     "_note": "Token metadata from SolanaTracker",
@@ -74,9 +72,10 @@
   },
   "buysCount": "number - recent buy count",
   "sellsCount": "number - recent sell count",
-  "status": "string - internal bot status (e.g., 'target', 'hold', 'sold', 'blacklist')",
+  "status": "string - internal bot status (e.g., 'hold', 'target', 'open', 'closed', 'blacklist')",
   "chartData": {
-    "oclhv": "array - raw chart data (OHLCV) per interval"
+    "_note": "Raw OHLCV chart data used to compute indicators",
+    "ohlcv": "array - OHLCV candles with timestamp, open, high, low, close, volume"
   },
   "indicators": {
     "_note": "Technical indicators generated from chartData",
@@ -93,12 +92,15 @@
     "trendBias": "boolean - optional flag based on trend"
   },
   "position": {
-    "_note": "Optional - position info if actively held",
+    "_note": "Optional - only present when a position is active ('open')",
     "qty": "number - amount of token held",
     "entryPrice": "number - entry price in SOL",
     "txid": "string - transaction ID",
     "timestamp": "number - UNIX timestamp of purchase"
   },
-  "lastUpdated": "number - timestamp of last update",
+  "lastUpdated": {
+    "_note": "Timestamp when the coin was last updated in CoinStore",
+    "value": "number - UNIX timestamp (ms)"
+  },
   "notes": "string - internal notes (optional)"
 }
