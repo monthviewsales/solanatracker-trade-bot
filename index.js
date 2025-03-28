@@ -55,6 +55,7 @@ class TradingBot extends EventEmitter {
 
     this.privateKey = process.env.PRIVATE_KEY;
     this.SOL_ADDRESS = "So11111111111111111111111111111111111111112";
+    this.buyingTokens = new Set();
     
     this.overwatch = new Overwatch(this.connection, this.walletManager, this.keypair);
     

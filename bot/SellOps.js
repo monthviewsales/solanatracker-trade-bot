@@ -29,11 +29,20 @@ async function monitorPositions(bot) {
                     entry.indicators = indicators;
 
                     const shouldSell = evaluateSell(entry, position, config);
-                    if (!shouldSell) return;
+                    if (!shouldSell) {
+                        logger.debug(`🟡 [SellOps] Hold signal for ${entry.token.symbol} — sell conditions not met`);
+                        return;
+                    }
+
+                    const live = await bot.api.fetchLivePriceData(entry.token.mint);
+                    if (!live || live.liquidity < config.MIN_LIQUIDITY) {
+                        logger.warn(`⛔ [SellOps] Live check blocked sell for ${entry.token.symbol} — liquidity: ${live?.liquidity ?? 'N/A'}`);
+                        return;
+                    }
 
                     bot.sellingPositions.add(mint);
 
-                    const txid = await bot.performSwap({ token: entry.token }, false, bot.overwatch);
+                    const txid = await bot.swapManager.performSwap({ token: entry.token }, false, bot.overwatch);
 
                     if (txid) {
                         entry.status = "sold";
