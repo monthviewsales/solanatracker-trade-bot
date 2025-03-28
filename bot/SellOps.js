@@ -16,13 +16,13 @@ async function monitorPositions(bot) {
             const openPositions = CoinStore.filterByStatus("open");
 
             const positionChecks = openPositions.map(async (entry) => {
-                const mint = entry.contract;
+                const mint = entry.token.mint;
 
                 try {
                     const position = entry.position;
                     if (!position || bot.sellingPositions.has(mint)) return;
 
-                    const chart = await fetchChartData(mint);
+                    const chart = await fetchChartData(entry.token.mint);
                     entry.chartData = chart;
 
                     const indicators = calculateIndicators(chart?.oclhv);
@@ -33,7 +33,7 @@ async function monitorPositions(bot) {
 
                     bot.sellingPositions.add(mint);
 
-                    const txid = await bot.performSwap({ token: entry }, false);
+                    const txid = await bot.performSwap({ token: entry.token }, false, bot.overwatch);
 
                     if (txid) {
                         entry.status = "sold";
@@ -46,12 +46,12 @@ async function monitorPositions(bot) {
                         };
                         delete entry.position;
                         await CoinStore.save();
-                        logger.info(`[SellOps] Sold ${entry.symbol} at ${entry.sold.exitPrice}`);
+                        logger.info(`💸 [SELL] ${entry.token?.symbol || "UNKNOWN"} sold at ${entry.sold.exitPrice}`);
                     }
 
                     bot.sellingPositions.delete(mint);
                 } catch (err) {
-                    logger.error(`[SellOps] Error checking ${entry.symbol}`, {
+                    logger.error(`❌ [SellOps] Error evaluating ${entry.token?.symbol || "UNKNOWN"}`, {
                         message: err.message,
                         stack: err.stack,
                     });
@@ -61,7 +61,7 @@ async function monitorPositions(bot) {
 
             await Promise.allSettled(positionChecks);
         } catch (err) {
-            logger.error("[SellOps] General loop error", { error: err });
+            logger.error("🔥 [SellOps] Main loop error", { error: err });
         }
 
         await sleep(config.monitorInterval);
