@@ -39,7 +39,7 @@
         "mintAuthority": "string or null"
       },
       "quoteToken": "string - SOL mint address",
-      "market": "string - market source (e.g., pumpfun-amm)",
+      "market": "string -  source (e.g., pumpfun-amm)",
       "deployer": "string - wallet that deployed token",
       "lastUpdated": "number - timestamp (ms)",
       "createdAt": "number - timestamp (ms)",

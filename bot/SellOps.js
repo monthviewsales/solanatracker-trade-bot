@@ -40,6 +40,17 @@ async function monitorPositions(bot) {
                         return;
                     }
 
+                    const token = entry.token;
+                    const requiredFields = ['mint', 'symbol'];
+                    // const requiredFields = ['mint', 'symbol', 'market'];
+                    const missing = requiredFields.filter(f => !token?.[f]);
+
+                    if (missing.length > 0) {
+                        logger.warn(`⚠️ [SellOps] Incomplete token data for ${token?.symbol || "UNKNOWN"} — missing: ${missing.join(", ")}`);
+                        bot.sellingPositions.delete(mint);
+                        return;
+                    }
+
                     bot.sellingPositions.add(mint);
 
                     const txid = await bot.swapManager.performSwap({ token: entry.token }, false, bot.overwatch);

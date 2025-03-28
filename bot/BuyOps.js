@@ -90,6 +90,7 @@ async function buyMonitor(bot) {
                         logger.debug(`⛔ [BuyOps] No buy for ${entry.token?.symbol || "UNKNOWN"} — evaluation returned false`);
                     } else {
                         logger.info(`✅ [BuyOps] Buy signal confirmed for ${entry.token?.symbol || "UNKNOWN"} — passing strategy check`);
+                        logger.debug(`[BuyOps] Preparing to swap ${entry.token.symbol} (${entry.token.mint})`);
                         entry.status = "target";
                     }
                 }
@@ -103,6 +104,7 @@ async function buyMonitor(bot) {
             let buys = 0;
 
             for (const entry of CoinStore.getAll()) {
+                logger.debug(`[BuyOps] Checking buy eligibility for ${entry.token.symbol}`);
                 if (buys >= openSlots) break;
                 
                 if (!entry.token || !entry.token.mint) {
@@ -126,15 +128,41 @@ async function buyMonitor(bot) {
                     continue;
                 }
 
+                const token = entry.token;
+                // const requiredFields = ['mint', 'symbol', 'market'];
+                const requiredFields = ['mint', 'symbol'];
+                const missing = requiredFields.filter(f => !token?.[f]);
+
+                if (missing.length > 0) {
+                    logger.warn(`⚠️ [BuyOps] Incomplete token data for ${token?.symbol || "UNKNOWN"} — missing: ${missing.join(", ")}`);
+                    continue;
+                }
+
                 if (
                     !bot.overwatch.positions.has(entry.token.mint) &&
                     !bot.buyingTokens.has(entry.token.mint)
-                )
-                {
+                ) {
+                    logger.debug(`[BuyOps] Attempting swap for ${entry.token.symbol}`);
+                    // Log the state of buyingTokens before adding the token
+                    logger.debug(`[BuyOps] buyingTokens before swap: ${[...bot.buyingTokens]}`);
+                    
+                    // Log the arguments being passed to performSwap
+                    logger.debug(`[BuyOps] performSwap args: token = { mint: ${entry.token.mint}, symbol: ${entry.token.symbol} }, isBuy: true, overwatch keys: ${Object.keys(bot.overwatch).join(", ")}`);
+                    
                     bot.buyingTokens.add(entry.token.mint);
-                    bot.swapManager.performSwap({ token: entry.token }, true, bot.overwatch).catch((err) => {
-                        logger.error("❌ [BuyOps] Swap failed", { token: entry.token?.symbol || "UNKNOWN", error: err });
-                    });
+                    
+                    bot.swapManager.performSwap(bot, { token: entry.token }, true, bot.overwatch)
+                        .then(() => {
+                            logger.info(`💸 [BuyOps] Swap executed for ${entry.token.symbol}`);
+                        })
+                        .catch((err) => {
+                            logger.error("❌ [BuyOps] Swap failed", { token: entry.token?.symbol || "UNKNOWN", error: err });
+                        })
+                        .finally(() => {
+                            bot.buyingTokens.delete(entry.token.mint);
+                            logger.debug(`[BuyOps] Removed ${entry.token.mint} from buyingTokens.`);
+                            logger.debug(`[BuyOps] buyingTokens after swap: ${[...bot.buyingTokens]}`);
+                        });
                     buys++;
                 }
             }
