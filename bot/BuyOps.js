@@ -42,6 +42,7 @@ async function buyMonitor(bot) {
             const openSlots = maxActive - openPositions;
 
             if (openSlots <= 0) {
+                logger.warn(`Max active positions reached (${config.maxActivePositions}). Open positions: ${openPositions}. Skipping buys until a slot opens.`);
                 await sleep(config.delay);
                 continue;
             }
@@ -115,6 +116,11 @@ async function buyMonitor(bot) {
                                 logger.debug(`[BuyOps] 🔫 Inline swap trigger for ${entry.token.symbol}`);
                                 const txid = await bot.swapManager.performSwap(bot, entry, true, bot.overwatch);
                                 logger.info(`💸 [BuyOps] Inline swap executed for ${entry.token.symbol} — txid: ${txid}`);
+                                if (txid) {
+                                    entry.status = "open";
+                                    CoinStore.addOrUpdate(entry);
+                                    await CoinStore.save();
+                                }
                             } catch (err) {
                                 logger.error(`❌ [BuyOps] Inline swap failed for ${entry.token?.symbol || "UNKNOWN"} — ${err.message}`, err);
                             } finally {
@@ -196,6 +202,11 @@ async function buyMonitor(bot) {
                         logger.debug(`[BuyOps] 🔄 Awaiting performSwap for ${entry.token.symbol}`);
                         const txid = await bot.swapManager.performSwap(bot, { token: entry.token }, true, bot.overwatch);
                         logger.info(`💸 [BuyOps] Swap executed for ${entry.token.symbol} — txid: ${txid}`);
+                        if (txid) {
+                            entry.status = "open";
+                            CoinStore.addOrUpdate(entry);
+                            await CoinStore.save();
+                        }
                     } catch (err) {
                         logger.error("❌ [BuyOps] Swap failed", { token: entry.token?.symbol || "UNKNOWN", error: err });
                     } finally {

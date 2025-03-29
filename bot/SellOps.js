@@ -60,7 +60,7 @@ async function monitorPositions(bot) {
                     const txid = await bot.swapManager.performSwap(bot, entry, false, bot.overwatch);
 
                     if (txid) {
-                        entry.status = "closed";
+                        entry.status = "hold";
                         entry.sold = {
                             exitPrice: chart.ohlcv?.at(-1)?.close || 0,
                             pnl: calculatePnL(entry),
