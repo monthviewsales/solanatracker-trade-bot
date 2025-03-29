@@ -71,7 +71,7 @@ async function buyMonitor(bot) {
                     continue;
                 }
 
-                await sleep(50); // back to fast mode now that rate limiter is lifted
+                // await sleep(50); // This can be uncommented if you're banging on a rate limiter.
                 const rawChartData = await fetchChartData(entry.token.mint);
                 const chartData = rawChartData.oclhv || [];
                 
@@ -104,9 +104,23 @@ async function buyMonitor(bot) {
                     if (!decision) {
                         logger.debug(`⛔ [BuyOps] No buy for ${entry.token?.symbol || "UNKNOWN"} — evaluation returned false`);
                     } else {
-                        logger.info(`✅ [BuyOps] Buy signal confirmed for ${entry.token?.symbol || "UNKNOWN"} — passing strategy check`);
-                        logger.debug(`[BuyOps] Preparing to swap ${entry.token.symbol} (${entry.token.mint})`);
+                        logger.info(`✅ [BuyOps] Buy signal confirmed for ${entry.token?.symbol || "UNKNOWN"} — performing inline swap`);
                         entry.status = "target";
+                        CoinStore.addOrUpdate(entry);
+                        await CoinStore.save();
+
+                        if (!bot.overwatch.positions.has(entry.token.mint) && !bot.buyingTokens.has(entry.token.mint)) {
+                            bot.buyingTokens.add(entry.token.mint);
+                            try {
+                                logger.debug(`[BuyOps] 🔫 Inline swap trigger for ${entry.token.symbol}`);
+                                const txid = await bot.swapManager.performSwap(bot, entry, true, bot.overwatch);
+                                logger.info(`💸 [BuyOps] Inline swap executed for ${entry.token.symbol} — txid: ${txid}`);
+                            } catch (err) {
+                                logger.error(`❌ [BuyOps] Inline swap failed for ${entry.token?.symbol || "UNKNOWN"} — ${err.message}`, err);
+                            } finally {
+                                bot.buyingTokens.delete(entry.token.mint);
+                            }
+                        }
                     }
                 }
 
@@ -118,6 +132,12 @@ async function buyMonitor(bot) {
             logger.debug(`[BuyOps] Overwatch.positions entries: ${JSON.stringify([...bot.overwatch.positions.entries()])}`);
             logger.debug(`[BuyOps] buyingTokens: ${JSON.stringify([...bot.buyingTokens])}`);
             
+            // Log CoinStore contents before buy execution
+            logger.debug(`[BuyOps] CoinStore contents before buy execution:`);
+            for (const coin of CoinStore.getAll()) {
+                logger.debug(`🧾 [BuyOps] ${coin.token?.symbol || "UNKNOWN"} — status: ${coin.status}`);
+            }
+
             // Execute buys
             let buys = 0;
 
@@ -146,7 +166,7 @@ async function buyMonitor(bot) {
 
                 // If the token is not already marked as a target and the price difference is too high, skip the swap
                 //if (entry.status !== "target" && diff > config.maxAllowedPriceChange) {
-                    if (diff > config.maxAllowedPriceChange) {
+                if (diff > config.maxAllowedPriceChange) {
                     logger.warn(`📉 [BuyOps] Live price moved too much for ${entry.token.symbol} (${(diff * 100).toFixed(2)}%) — skipping swap`);
                     continue;
                 }
@@ -172,18 +192,17 @@ async function buyMonitor(bot) {
                     
                     bot.buyingTokens.add(entry.token.mint);
                     
-                    bot.swapManager.performSwap(bot, { token: entry.token }, true, bot.overwatch)
-                        .then(() => {
-                            logger.info(`💸 [BuyOps] Swap executed for ${entry.token.symbol}`);
-                        })
-                        .catch((err) => {
-                            logger.error("❌ [BuyOps] Swap failed", { token: entry.token?.symbol || "UNKNOWN", error: err });
-                        })
-                        .finally(() => {
-                            bot.buyingTokens.delete(entry.token.mint);
-                            logger.debug(`[BuyOps] Removed ${entry.token.mint} from buyingTokens.`);
-                            logger.debug(`[BuyOps] buyingTokens after swap: ${[...bot.buyingTokens]}`);
-                        });
+                    try {
+                        logger.debug(`[BuyOps] 🔄 Awaiting performSwap for ${entry.token.symbol}`);
+                        const txid = await bot.swapManager.performSwap(bot, { token: entry.token }, true, bot.overwatch);
+                        logger.info(`💸 [BuyOps] Swap executed for ${entry.token.symbol} — txid: ${txid}`);
+                    } catch (err) {
+                        logger.error("❌ [BuyOps] Swap failed", { token: entry.token?.symbol || "UNKNOWN", error: err });
+                    } finally {
+                        bot.buyingTokens.delete(entry.token.mint);
+                        logger.debug(`[BuyOps] Removed ${entry.token.mint} from buyingTokens.`);
+                        logger.debug(`[BuyOps] buyingTokens after swap: ${[...bot.buyingTokens]}`);
+                    }
                     buys++;
                 }
             }

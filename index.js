@@ -1,5 +1,4 @@
 require("dotenv").config();
-const { SolanaTracker } = require("solana-swap");
 const { Keypair, PublicKey, Connection } = require("@solana/web3.js");
 const bs58 = require("bs58");
 const chalk = require("chalk");
@@ -14,6 +13,7 @@ const {
   fetchTrendingTokens,
   fetchChartData,
 } = require('./lib/solanaTrackerAPI');
+const { SolanaTracker } = require("solana-swap");
 
 const EventEmitter = require('events');
 const runStartup = require('./bot/StartupManager');
@@ -49,19 +49,24 @@ class TradingBot extends EventEmitter {
       requireSocialData: process.env.REQUIRE_SOCIAL_DATA === "true",
       maxNegativePnL: parseFloat(process.env.MAX_NEGATIVE_PNL) || -Infinity,
       maxPositivePnL: parseFloat(process.env.MAX_POSITIVE_PNL) || Infinity,
+      maxAllowedPriceChange: parseFloat(process.env.MAX_PRICE_DIFF) || 0.02,
       markets: process.env.MARKETS?.split(",").map((m) => m.trim()) || ['raydium', 'orca', 'pumpfun', 'moonshot', 'raydium-cpmm'],
       maxActivePositions: parseInt(process.env.MAX_ACTIVE_POSITIONS) || 5,
     };
 
-    this.privateKey = process.env.PRIVATE_KEY;
     this.SOL_ADDRESS = "So11111111111111111111111111111111111111112";
-    this.buyingTokens = new Set();
     
-    this.overwatch = new Overwatch(this.connection, this.walletManager, this.keypair);
+    this.privateKey = process.env.PRIVATE_KEY;
     
     this.connection = new Connection(this.config.rpcUrl);
     this.walletManager = new WalletManager(this.connection);
-    this.swapManager = new SwapManager(this.connection, this.config, this.keypair, this.solanaTracker, this.SOL_ADDRESS);
+    this.swapManager = new SwapManager(this.connection, this.config, this.keypair, this.SOL_ADDRESS);
+    this.overwatch = new Overwatch(this.connection, this.walletManager, this.keypair);
+    
+    this.buyingTokens = new Set();
+
+    this.keypair = Keypair.fromSecretKey(bs58.decode ? bs58.decode(this.privateKey) : bs58.default.decode(this.privateKey));
+    this.solanaTracker = new SolanaTracker(this.keypair, this.config.rpcUrl);
   }
 
   startHeartbeat() {

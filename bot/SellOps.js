@@ -57,7 +57,7 @@ async function monitorPositions(bot) {
 
                     bot.sellingPositions.add(mint);
 
-                    const txid = await bot.swapManager.performSwap({ token: entry.token }, false, bot.overwatch);
+                    const txid = await bot.swapManager.performSwap(bot, entry, false, bot.overwatch);
 
                     if (txid) {
                         entry.status = "closed";
