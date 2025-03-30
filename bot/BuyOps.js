@@ -1,3 +1,4 @@
+require("dotenv").config();
 const { calculateIndicators } = require("../lib/indicators");
 const {
     fetchTrendingTokens,
@@ -38,12 +39,12 @@ async function buyMonitor(bot) {
     while (true) {
         try {
             const openPositions = CoinStore.filterByStatus("open").length;
-            const maxActive = config.maxActivePositions;
+            const maxActive = process.env.MAX_ACTIVE_POSITIONS;
             const openSlots = maxActive - openPositions;
 
             if (openSlots <= 0) {
-                logger.warn(`Max active positions reached (${config.maxActivePositions}). Open positions: ${openPositions}. Skipping buys until a slot opens.`);
-                await sleep(config.delay);
+                logger.warn(`Max active positions reached (${maxActive}). Open positions: ${openPositions}. Skipping buys until a slot opens.`);
+                await sleep(process.env.DELAY);
                 continue;
             }
 

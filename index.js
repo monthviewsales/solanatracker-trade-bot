@@ -56,6 +56,7 @@ class TradingBot extends EventEmitter {
     });
     this.overwatch = new Overwatch(this.connection, this.walletManager, this.keypair);
     this.buyingTokens = new Set();
+    this.sellingPositions = new Set();
   }
 
   startHeartbeat() {
