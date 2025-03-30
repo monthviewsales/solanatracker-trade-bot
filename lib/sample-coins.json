@@ -1,0 +1,106 @@
+{
+  "token": {
+    "_note": "Token metadata from SolanaTracker",
+    "name": "string - display name of the token",
+    "symbol": "string - token symbol",
+    "mint": "string - unique mint address (primary ID)",
+    "uri": "string - URI pointing to IPFS or metadata",
+    "decimals": "number - token decimal places",
+    "hasFileMetaData": "boolean - indicates if metadata file exists",
+    "createdOn": "string - typically a URL (e.g., pump.fun)",
+    "description": "string - short description of the token",
+    "image": "string - URL to the token's image",
+    "showName": "boolean - whether to show token name in UI",
+    "twitter": "string - URL to token's Twitter or search link"
+  },
+  "pools": [
+    {
+      "_note": "Liquidity pool and market details",
+      "liquidity": {
+        "quote": "number - SOL liquidity",
+        "usd": "number - USD liquidity estimate"
+      },
+      "price": {
+        "quote": "number - price in SOL",
+        "usd": "number - price in USD"
+      },
+      "tokenSupply": "number - total supply in pool",
+      "lpBurn": "number - percent of LP burned",
+      "tokenAddress": "string - mint address",
+      "marketCap": {
+        "quote": "number - SOL market cap",
+        "usd": "number - USD market cap"
+      },
+      "decimals": "number - token decimals (usually matches token.decimals)",
+      "security": {
+        "freezeAuthority": "string or null",
+        "mintAuthority": "string or null"
+      },
+      "quoteToken": "string - SOL mint address",
+      "market": "string -  source (e.g., pumpfun-amm)",
+      "deployer": "string - wallet that deployed token",
+      "lastUpdated": "number - timestamp (ms)",
+      "createdAt": "number - timestamp (ms)",
+      "txns": {
+        "buys": "number - count of buys",
+        "total": "number - total transactions",
+        "volume": "number - trading volume",
+        "sells": "number - count of sells"
+      },
+      "poolId": "string - unique pool identifier"
+    }
+  ],
+  "events": {
+    "_note": "Price change percentages over time windows",
+    "1m": { "priceChangePercentage": "number" },
+    "5m": { "priceChangePercentage": "number" },
+    "15m": { "priceChangePercentage": "number" },
+    "30m": { "priceChangePercentage": "number" },
+    "1h": { "priceChangePercentage": "number" },
+    "2h": { "priceChangePercentage": "number" },
+    "3h": { "priceChangePercentage": "number" },
+    "4h": { "priceChangePercentage": "number" },
+    "5h": { "priceChangePercentage": "number" },
+    "6h": { "priceChangePercentage": "number" },
+    "12h": { "priceChangePercentage": "number" },
+    "24h": { "priceChangePercentage": "number" }
+  },
+  "risk": {
+    "rugged": "boolean - if the token has rugged",
+    "risks": "array - details of any risks",
+    "score": "number - risk score"
+  },
+  "buysCount": "number - recent buy count",
+  "sellsCount": "number - recent sell count",
+  "status": "string - internal bot status (e.g., 'hold', 'target', 'open', 'closed', 'blacklist')",
+  "chartData": {
+    "_note": "Raw OHLCV chart data used to compute indicators",
+    "ohlcv": "array - OHLCV candles with timestamp, open, high, low, close, volume"
+  },
+  "indicators": {
+    "_note": "Technical indicators generated from chartData",
+    "price": "number - latest price",
+    "rsi": "number - Relative Strength Index",
+    "emaShort": "number - short-period EMA (e.g., 5)",
+    "emaMedium": "number - medium-period EMA (e.g., 13)",
+    "bb": {
+      "middle": "number - Bollinger Band midline",
+      "upper": "number - upper Bollinger Band",
+      "lower": "number - lower Bollinger Band",
+      "pb": "number - percent B value"
+    },
+    "trendBias": "boolean - optional flag based on trend"
+  },
+  "position": {
+    "_note": "Optional - only present when a position is active ('open')",
+    "qty": "number - amount of token held",
+    "entryPrice": "number - entry price in SOL",
+    "txid": "string - transaction ID",
+    "timestamp": "number - UNIX timestamp of purchase"
+  },
+  "lastUpdated": {
+    "_note": "Timestamp when the coin was last updated in CoinStore",
+    "value": "number - UNIX timestamp (ms)"
+  },
+  "notes": "string - internal notes (optional)"
+}
