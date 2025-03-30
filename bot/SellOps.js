@@ -18,18 +18,34 @@ async function monitorPositions(bot) {
             const positionChecks = openPositions.map(async (entry) => {
                 try {
                     const mint = entry.token.mint;
-                    if (!entry.position || bot.sellingPositions.has(mint)) return;
+                    logger.debug(`[SellOps] Processing entry for ${entry.token.symbol || 'UNKNOWN'}: position exists = ${Boolean(entry.position)}, sellingPositions contains ${mint} = ${bot.sellingPositions.has(mint)}`);
+                    if (entry.status !== "open" || bot.sellingPositions.has(mint)) return;
 
-                    const chart = await fetchChartData(entry.token.mint);
-                    entry.chartData = chart;
+                    const rawChartData = await fetchChartData(entry.token.mint);
 
-                    const indicators = calculateIndicators(chart?.ohlcv);
-                    entry.indicators = indicators;
+                    const chartData = rawChartData.oclhv || [];
 
-                    if (!chart || !chart.ohlcv || !indicators) {
-                        logger.warn(`[SellOps] Skipping ${entry.token.symbol} — invalid chart or indicators`);
+                    if (!Array.isArray(chartData) || chartData.length === 0) {
+                        logger.warn(`[SellOps] Empty chart data for ${entry.token.symbol || 'UNKNOWN'} — skipping sell`);
                         return;
                     }
+
+                    // Trim to the last 50 candles
+                    const trimmedChart = chartData.slice(-50);
+                    entry.chartData = { oclhv: trimmedChart };
+
+                    if (chartData.length < 20) {
+                        logger.warn(`[SellOps] Chart data too short for ${entry.token.symbol || 'UNKNOWN'} (got ${chartData.length} data points, require at least 20) — skipping sell`);
+                        return;
+                    }
+
+                    const indicators = calculateIndicators(trimmedChart);
+                    if (!indicators || Object.keys(indicators).length === 0) {
+                        logger.warn(`[SellOps] Unable to calculate indicators for ${entry.token.symbol || 'UNKNOWN'} — skipping sell`);
+                        return;
+                    }
+
+                    entry.indicators = indicators;
 
                     const shouldSell = evaluateSell(entry, entry.position, config);
                     if (!shouldSell) {
@@ -60,7 +76,7 @@ async function monitorPositions(bot) {
                     if (txid) {
                         entry.status = "hold";
                         entry.sold = {
-                            exitPrice: chart.ohlcv?.at(-1)?.close || 0,
+                            exitPrice: chartData.at(-1)?.close || 0,
                             pnl: calculatePnL(entry),
                             pnlPercentage: calculatePnL(entry, true),
                             closeTime: Date.now(),
@@ -89,6 +105,18 @@ async function monitorPositions(bot) {
 
         await sleep(config.monitorInterval);
     }
+}
+
+async function fetchChartWithRetry(mint, retries = 2, delay = 1000) {
+    for (let i = 0; i <= retries; i++) {
+        const chart = await fetchChartData(entry.token.mint);
+        if (chart && Array.isArray(chart.ohlcv) && chart.ohlcv.length > 0) {
+            return chart;
+        }
+        logger.warn(`[SellOps] Retry ${i + 1}: Empty chart data for mint ${mint}, retrying in ${delay}ms...`);
+        await sleep(delay);
+    }
+    return null;
 }
 
 function calculatePnL(entry, percentage = false) {

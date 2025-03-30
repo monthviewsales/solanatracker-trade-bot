@@ -9,3 +9,4 @@ sold_positions.json
 !.env.vault
 target_list.json
 coins.json
+*.bak

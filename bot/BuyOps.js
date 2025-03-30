@@ -112,20 +112,29 @@ async function buyMonitor(bot) {
                         await CoinStore.save();
 
                         if (!bot.overwatch.positions.has(entry.token.mint) && !bot.buyingTokens.has(entry.token.mint)) {
-                            bot.buyingTokens.add(entry.token.mint);
-                            try {
-                                logger.debug(`[BuyOps] 🔫 Inline swap trigger for ${entry.token.symbol}`);
-                                const txid = await bot.swapManager.performSwap(bot, entry, true, bot.overwatch);
-                                logger.info(`💸 [BuyOps] Inline swap executed for ${entry.token.symbol} — txid: ${txid}`);
-                                if (txid) {
-                                    entry.status = "open";
+                            // Check wallet SOL balance before attempting swap
+                            const solBalance = await bot.walletManager.getWalletAmount(bot.publicKeyb58, config.SOL_MINT);
+                            if (solBalance < config.minSOLBalance) {
+                                logger.warn(`⚠️ [BuyOps] Insufficient SOL balance (${solBalance}). Skipping swap for ${entry.token.symbol}.`);
+                            } else {
+                                bot.buyingTokens.add(entry.token.mint);
+                                try {
+                                    logger.debug(`[BuyOps] 🔫 Inline swap trigger for ${entry.token.symbol}`);
+                                    const txid = await bot.swapManager.performSwap(bot, entry, true, bot.overwatch);
+                                    logger.info(`💸 [BuyOps] Inline swap executed for ${entry.token.symbol} — txid: ${txid}`);
+                                    if (txid) {
+                                        entry.status = "open";
+                                        CoinStore.addOrUpdate(entry);
+                                        await CoinStore.save();
+                                    }
+                                } catch (err) {
+                                    logger.error(`❌ [BuyOps] Inline swap failed for ${entry.token?.symbol || "UNKNOWN"} — ${err.message}`, err);
+                                    entry.status = "failed";
                                     CoinStore.addOrUpdate(entry);
                                     await CoinStore.save();
+                                } finally {
+                                    bot.buyingTokens.delete(entry.token.mint);
                                 }
-                            } catch (err) {
-                                logger.error(`❌ [BuyOps] Inline swap failed for ${entry.token?.symbol || "UNKNOWN"} — ${err.message}`, err);
-                            } finally {
-                                bot.buyingTokens.delete(entry.token.mint);
                             }
                         }
                     }
@@ -193,29 +202,38 @@ async function buyMonitor(bot) {
                     !bot.overwatch.positions.has(entry.token.mint) &&
                     !bot.buyingTokens.has(entry.token.mint)
                 ) {
-                    logger.debug(`[BuyOps] Attempting swap for ${entry.token.symbol}`);
-                    logger.debug(`[BuyOps] buyingTokens before swap: ${[...bot.buyingTokens]}`);
-                    logger.debug(`[BuyOps] performSwap args: token = { mint: ${entry.token.mint}, symbol: ${entry.token.symbol} }, isBuy: true, overwatch keys: ${Object.keys(bot.overwatch).join(",")}`);
-                    
-                    bot.buyingTokens.add(entry.token.mint);
-                    
-                    try {
-                        logger.debug(`[BuyOps] 🔄 Awaiting performSwap for ${entry.token.symbol}`);
-                        const txid = await bot.swapManager.performSwap(bot, { token: entry.token }, true, bot.overwatch);
-                        logger.info(`💸 [BuyOps] Swap executed for ${entry.token.symbol} — txid: ${txid}`);
-                        if (txid) {
-                            entry.status = "open";
+                    // Check wallet SOL balance before swap
+                    const solBalance = await bot.walletManager.getWalletAmount(bot.publicKeyb58, config.SOL_MINT);
+                    if (solBalance < config.minSOLBalance) {
+                        logger.warn(`⚠️ [BuyOps] Insufficient SOL balance (${solBalance}). Skipping swap for ${entry.token.symbol}.`);
+                    } else {
+                        logger.debug(`[BuyOps] Attempting swap for ${entry.token.symbol}`);
+                        logger.debug(`[BuyOps] buyingTokens before swap: ${[...bot.buyingTokens]}`);
+                        logger.debug(`[BuyOps] performSwap args: token = { mint: ${entry.token.mint}, symbol: ${entry.token.symbol} }, isBuy: true, overwatch keys: ${Object.keys(bot.overwatch).join(",")}`);
+                        
+                        bot.buyingTokens.add(entry.token.mint);
+                        
+                        try {
+                            logger.debug(`[BuyOps] 🔄 Awaiting performSwap for ${entry.token.symbol}`);
+                            const txid = await bot.swapManager.performSwap(bot, { token: entry.token }, true, bot.overwatch);
+                            logger.info(`💸 [BuyOps] Swap executed for ${entry.token.symbol} — txid: ${txid}`);
+                            if (txid) {
+                                entry.status = "open";
+                                CoinStore.addOrUpdate(entry);
+                                await CoinStore.save();
+                            }
+                        } catch (err) {
+                            logger.error(`❌ [BuyOps] Swap failed for ${entry.token?.symbol || "UNKNOWN"} — ${err.message}`, err);
+                            entry.status = "failed";
                             CoinStore.addOrUpdate(entry);
                             await CoinStore.save();
+                        } finally {
+                            bot.buyingTokens.delete(entry.token.mint);
+                            logger.debug(`[BuyOps] Removed ${entry.token.mint} from buyingTokens.`);
+                            logger.debug(`[BuyOps] buyingTokens after swap: ${[...bot.buyingTokens]}`);
                         }
-                    } catch (err) {
-                        logger.error("❌ [BuyOps] Swap failed", { token: entry.token?.symbol || "UNKNOWN", error: err });
-                    } finally {
-                        bot.buyingTokens.delete(entry.token.mint);
-                        logger.debug(`[BuyOps] Removed ${entry.token.mint} from buyingTokens.`);
-                        logger.debug(`[BuyOps] buyingTokens after swap: ${[...bot.buyingTokens]}`);
+                        buys++;
                     }
-                    buys++;
                 }
             }
         } catch (err) {
