@@ -27,8 +27,8 @@ function normalizeTrendingEntry(tokenEntry) {
 }
 
 module.exports = {
-    start(bot) {
-        buyMonitor(bot);
+    async start(bot) {
+        await buyMonitor(bot);
     },
 };
 
@@ -222,6 +222,7 @@ async function buyMonitor(bot) {
                 stack: err.stack,
                 error: err
             });
+            await sleep(config.errorRetryDelay || 5000); // Graceful retry after an error
         }
 
         await sleep(config.delay);

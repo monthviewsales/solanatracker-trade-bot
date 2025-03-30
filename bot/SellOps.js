@@ -3,8 +3,8 @@ const { calculateIndicators, evaluateSell } = require("../lib/indicators");
 const logger = require("../utils/logger");
 
 module.exports = {
-    start(bot) {
-        monitorPositions(bot);
+    async start(bot) {
+        await monitorPositions(bot);
     },
 };
 
@@ -16,11 +16,9 @@ async function monitorPositions(bot) {
             const openPositions = CoinStore.filterByStatus("open");
 
             const positionChecks = openPositions.map(async (entry) => {
-                const mint = entry.token.mint;
-
                 try {
-                    const position = entry.position;
-                    if (!position || bot.sellingPositions.has(mint)) return;
+                    const mint = entry.token.mint;
+                    if (!entry.position || bot.sellingPositions.has(mint)) return;
 
                     const chart = await fetchChartData(entry.token.mint);
                     entry.chartData = chart;
@@ -33,7 +31,7 @@ async function monitorPositions(bot) {
                         return;
                     }
 
-                    const shouldSell = evaluateSell(entry, position, config);
+                    const shouldSell = evaluateSell(entry, entry.position, config);
                     if (!shouldSell) {
                         logger.debug(`🟡 [SellOps] Hold signal for ${entry.token.symbol} — sell conditions not met`);
                         return;
@@ -75,7 +73,7 @@ async function monitorPositions(bot) {
 
                     bot.sellingPositions.delete(mint);
                 } catch (err) {
-                    logger.error(`❌ [SellOps] Error evaluating ${entry.token?.symbol || "UNKNOWN"}`, {
+                    logger.error(`❌ [SellOps] Error processing ${entry.token?.symbol || "UNKNOWN"}`, {
                         message: err.message,
                         stack: err.stack,
                     });
@@ -86,6 +84,7 @@ async function monitorPositions(bot) {
             await Promise.allSettled(positionChecks);
         } catch (err) {
             logger.error("🔥 [SellOps] Main loop error", { error: err });
+            await sleep(config.errorRetryDelay || 5000); // Graceful retry after an error
         }
 
         await sleep(config.monitorInterval);

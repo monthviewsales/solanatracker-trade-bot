@@ -1,32 +1,14 @@
 require("dotenv").config();
-const { Keypair, PublicKey, Connection } = require("@solana/web3.js");
+const { Keypair, Connection } = require("@solana/web3.js");
 const bs58 = require("bs58");
-const chalk = require("chalk");
-const axios = require("axios");
 const logger = require('./utils/logger');
-const fs = require("fs").promises;
 const WalletManager = require("./lib/WalletManager");
 const SwapManager = require("./lib/SwapManager");
 const Overwatch = require("./lib/OverWatch");
-// API Work
-const {
-  fetchTrendingTokens,
-  fetchChartData,
-} = require('./lib/solanaTrackerAPI');
 const { SolanaTracker } = require("solana-swap");
 
 const EventEmitter = require('events');
 const runStartup = require('./bot/StartupManager');
-
-const session = axios.create({
-  baseURL: "https://data.solanatracker.io/",
-  timeout: 10000,
-  headers: { "x-api-key": process.env.API_KEY },
-});
-
-const sleep = (ms) => {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-};
 
 class TradingBot extends EventEmitter {
   constructor() {
@@ -55,18 +37,25 @@ class TradingBot extends EventEmitter {
     };
 
     this.SOL_ADDRESS = "So11111111111111111111111111111111111111112";
-    
-    this.privateKey = process.env.PRIVATE_KEY;
-    
-    this.connection = new Connection(this.config.rpcUrl);
-    this.walletManager = new WalletManager(this.connection);
-    this.swapManager = new SwapManager(this.connection, this.config, this.keypair, this.SOL_ADDRESS);
-    this.overwatch = new Overwatch(this.connection, this.walletManager, this.keypair);
-    
-    this.buyingTokens = new Set();
 
+    this.privateKey = process.env.PRIVATE_KEY;
     this.keypair = Keypair.fromSecretKey(bs58.decode ? bs58.decode(this.privateKey) : bs58.default.decode(this.privateKey));
+    this.publicKeyb58 = String(this.keypair.publicKey.toBase58());
+    this.connection = new Connection(this.config.rpcUrl);
+    this.walletManager = new WalletManager(this.connection, this.privateKey, this.keypair, this.publicKeyb58);
     this.solanaTracker = new SolanaTracker(this.keypair, this.config.rpcUrl);
+    this.swapManager = new SwapManager({
+      connection: this.connection,
+      privateKey: this.privateKey,
+      keypair: this.keypair,
+      publicKeyb58: this.publicKeyb58,
+      config: this.config,
+      soldPositionsFile: './soldPositions.json',
+      positionsFile: './positions.json',
+      solanaTracker: this.solanaTracker
+    });
+    this.overwatch = new Overwatch(this.connection, this.walletManager, this.keypair);
+    this.buyingTokens = new Set();
   }
 
   startHeartbeat() {
@@ -85,8 +74,16 @@ class TradingBot extends EventEmitter {
     this.once('startup:complete', () => {
       logger.info("🟢 Startup complete. Launching operations...");
       this.startHeartbeat();
-      require("./bot/BuyOps").start(this);
-      require("./bot/SellOps").start(this);
+      (async () => {
+          try {
+              await Promise.all([
+                  require("./bot/BuyOps").start(this),
+                  require("./bot/SellOps").start(this)
+              ]);
+          } catch (err) {
+              logger.error("🔥 Error during operations startup", { error: err });
+          }
+      })();
     });
 
     this.once('startup:error', (err) => {
