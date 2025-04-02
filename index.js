@@ -5,6 +5,7 @@ const logger = require('./utils/logger');
 const WalletManager = require("./lib/WalletManager");
 const SwapManager = require("./lib/SwapManager");
 const Overwatch = require("./lib/OverWatch");
+const CoinStore = require('./lib/CoinStore');
 const { SolanaTracker } = require("solana-swap");
 
 const EventEmitter = require('events');
@@ -72,18 +73,28 @@ class TradingBot extends EventEmitter {
     await this.overwatch.loadSoldPositions();
     await this.overwatch.validatePositions();
 
+    try {
+      // Fetch the latest trending coins
+      const trendingCoins = await this.solanaTracker.getTrendingTokens();
+      logger.info(`🔄 Syncing trending coins on startup...`);
+      await CoinStore.syncTrendingCoins(trendingCoins);
+      logger.info("✅ Trending coins synced successfully.");
+    } catch (error) {
+      logger.error("❌ Error syncing trending coins during startup.", { error: error.message });
+    }
+
     this.once('startup:complete', () => {
       logger.info("🟢 Startup complete. Launching operations...");
       this.startHeartbeat();
       (async () => {
-          try {
-              await Promise.all([
-                  require("./bot/BuyOps").start(this),
-                  require("./bot/SellOps").start(this)
-              ]);
-          } catch (err) {
-              logger.error("🔥 Error during operations startup", { error: err });
-          }
+        try {
+          await Promise.all([
+            require("./bot/BuyOps").start(this),
+            require("./bot/SellOps").start(this)
+          ]);
+        } catch (err) {
+          logger.error("🔥 Error during operations startup", { error: err });
+        }
       })();
     });
 

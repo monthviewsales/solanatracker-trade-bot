@@ -49,7 +49,14 @@ async function buyMonitor(bot) {
             }
 
             const trending = await fetchTrendingTokens(config.trendingtimeframe);
-            const filtered = filterTokens(trending, CoinStore);
+            const filtered = filterTokens(trending, CoinStore).filter((token) => {
+                const existingEntry = CoinStore.findByMint(token.token.mint);
+                if (existingEntry && existingEntry.status === "blacklist") {
+                    logger.info(`🚫 [BuyOps] Ignoring blacklisted token: ${token.token.symbol} (${token.token.mint})`);
+                    return false;
+                }
+                return true;
+            });
 
             // Add new coins to CoinStore as "hold"
             for (const token of filtered) {
@@ -66,6 +73,10 @@ async function buyMonitor(bot) {
 
             // Chart data + indicators + evaluate signals
             for (const entry of CoinStore.getAll()) {
+                if (entry.status === "blacklist") {
+                    logger.info(`🚫 [BuyOps] Skipping blacklisted token during buy evaluation: ${entry.token?.symbol || "UNKNOWN"}`);
+                    continue;
+                }
                 //if (entry.status !== "hold") continue;
 
                 if (!entry.token || !entry.token.mint) {
