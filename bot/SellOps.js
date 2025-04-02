@@ -53,8 +53,12 @@ async function monitorPositions(bot) {
                         return;
                     }
 
-                    const live = await bot.api.fetchLivePriceData(entry.token.mint);
-                    if (!live || live.liquidity < config.MIN_LIQUIDITY) {
+                    const live = bot.api?.fetchLivePriceData ? await bot.api.fetchLivePriceData(entry.token.mint) : null;
+                    if (!live) {
+                        logger.warn(`⛔ [SellOps] Unable to fetch live price data for ${entry.token.symbol} — skipping sell`);
+                        return;
+                    }
+                    if (live.liquidity < config.MIN_LIQUIDITY) {
                         logger.warn(`⛔ [SellOps] Live check blocked sell for ${entry.token.symbol} — liquidity: ${live?.liquidity ?? 'N/A'}`);
                         return;
                     }
@@ -108,13 +112,17 @@ async function monitorPositions(bot) {
 }
 
 function calculatePnL(entry, percentage = false) {
-    const entryPrice = entry?.position?.entryPrice || 0;
-    const amount = entry?.position?.amount || 0;
-    const exitPrice = entry?.sold?.exitPrice || 0;
+    const entryPrice = Number.isFinite(entry?.position?.entryPrice) ? entry.position.entryPrice : 0;
+    const amount = Number.isFinite(entry?.position?.amount) ? entry.position.amount : 1;
+    const exitPrice = Number.isFinite(entry?.sold?.exitPrice) ? entry.sold.exitPrice : ind.price;
+    
+    if (entryPrice === 0 || amount === 0) {
+        return percentage ? 0 : 0;
+    }
 
     const pnl = (exitPrice - entryPrice) * amount;
     if (percentage) {
-        return entryPrice > 0 ? (pnl / (entryPrice * amount)) * 100 : 0;
+        return (pnl / (entryPrice * amount)) * 100;
     }
     return pnl;
 }
