@@ -107,18 +107,6 @@ async function monitorPositions(bot) {
     }
 }
 
-async function fetchChartWithRetry(mint, retries = 2, delay = 1000) {
-    for (let i = 0; i <= retries; i++) {
-        const chart = await fetchChartData(entry.token.mint);
-        if (chart && Array.isArray(chart.ohlcv) && chart.ohlcv.length > 0) {
-            return chart;
-        }
-        logger.warn(`[SellOps] Retry ${i + 1}: Empty chart data for mint ${mint}, retrying in ${delay}ms...`);
-        await sleep(delay);
-    }
-    return null;
-}
-
 function calculatePnL(entry, percentage = false) {
     const entryPrice = entry?.position?.entryPrice || 0;
     const amount = entry?.position?.amount || 0;

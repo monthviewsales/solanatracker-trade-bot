@@ -6,7 +6,7 @@ const {
 } = require("../lib/solanaTrackerAPI");
 const { filterTokens } = require("../lib/tokenUtils");
 
-const { evaluateTrade } = require("../lib/indicators");
+const { evaluateBuy } = require("../lib/indicators");
 const logger = require("../utils/logger");
 
 function sleep(ms) {
@@ -44,7 +44,7 @@ async function buyMonitor(bot) {
 
             if (openSlots <= 0) {
                 logger.warn(`Max active positions reached (${maxActive}). Open positions: ${openPositions}. Skipping buys until a slot opens.`);
-                await sleep(process.env.DELAY);
+                await sleep(parseInt(process.env.DELAY) || 1000);
                 continue;
             }
 
@@ -112,8 +112,8 @@ async function buyMonitor(bot) {
                 } else {
                     logger.debug(`📊 [BuyOps] Indicators for ${entry.token?.symbol || "UNKNOWN"}: ${JSON.stringify(indicators)}`);
                     entry.indicators = indicators;
-                    const decision = evaluateTrade(entry, config);
-                    logger.debug(`[BuyOps] evaluateTrade for ${entry.token?.symbol || "UNKNOWN"} returned: ${decision}`);
+                    const decision = evaluateBuy(entry, config);
+                    logger.debug(`[BuyOps] evaluateBuy for ${entry.token?.symbol || "UNKNOWN"} returned: ${decision}`);
                     if (!decision) {
                         logger.debug(`⛔ [BuyOps] No buy for ${entry.token?.symbol || "UNKNOWN"} — evaluation returned false`);
                     } else {
@@ -125,7 +125,8 @@ async function buyMonitor(bot) {
                         if (!bot.overwatch.positions.has(entry.token.mint) && !bot.buyingTokens.has(entry.token.mint)) {
                             // Check wallet SOL balance before attempting swap
                             const solBalance = await bot.walletManager.getWalletAmount(bot.publicKeyb58, config.SOL_MINT);
-                            if (solBalance < config.minSOLBalance) {
+                            const minSOLBalance = parseFloat(process.env.AMOUNT) || 0.1;
+                            if (solBalance < minSOLBalance) {
                                 logger.warn(`⚠️ [BuyOps] Insufficient SOL balance (${solBalance}). Skipping swap for ${entry.token.symbol}.`);
                             } else {
                                 bot.buyingTokens.add(entry.token.mint);
@@ -215,7 +216,8 @@ async function buyMonitor(bot) {
                 ) {
                     // Check wallet SOL balance before swap
                     const solBalance = await bot.walletManager.getWalletAmount(bot.publicKeyb58, config.SOL_MINT);
-                    if (solBalance < config.minSOLBalance) {
+                    const minSOLBalance = parseFloat(process.env.AMOUNT) || 0.1;
+                    if (solBalance < minSOLBalance) {
                         logger.warn(`⚠️ [BuyOps] Insufficient SOL balance (${solBalance}). Skipping swap for ${entry.token.symbol}.`);
                     } else {
                         logger.debug(`[BuyOps] Attempting swap for ${entry.token.symbol}`);
