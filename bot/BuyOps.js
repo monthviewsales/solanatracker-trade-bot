@@ -1,11 +1,7 @@
 require("dotenv").config();
 const { calculateIndicators } = require("../lib/indicators");
-const {
-    fetchTrendingTokens,
-    fetchChartData,
-} = require("../lib/solanaTrackerAPI");
+const { fetchTrendingTokens, fetchChartData, getTRXHistory } = require("../lib/solanaTrackerAPI");
 const { filterTokens } = require("../lib/tokenUtils");
-
 const { evaluateBuy } = require("../lib/indicators");
 const logger = require("../utils/logger");
 
@@ -124,7 +120,7 @@ async function buyMonitor(bot) {
 
                         if (!bot.overwatch.positions.has(entry.token.mint) && !bot.buyingTokens.has(entry.token.mint)) {
                             // Check wallet SOL balance before attempting swap
-                            const solBalance = await bot.walletManager.getWalletAmount(bot.publicKeyb58, config.SOL_MINT);
+                            const solBalance = await bot.walletManager.getWalletAmount(bot.publicKeyb58, config.SOL_ADDRESS);
                             const minSOLBalance = parseFloat(process.env.AMOUNT) || 0.1;
                             if (solBalance < minSOLBalance) {
                                 logger.warn(`⚠️ [BuyOps] Insufficient SOL balance (${solBalance}). Skipping swap for ${entry.token.symbol}.`);
@@ -135,6 +131,18 @@ async function buyMonitor(bot) {
                                     const txid = await bot.swapManager.performSwap(bot, entry, true, bot.overwatch);
                                     logger.info(`💸 [BuyOps] Inline swap executed for ${entry.token.symbol} — txid: ${txid}`);
                                     if (txid) {
+                                        // Assume priceNow is the executed price and entry.qty is available or default to 1
+                                        const trxData = getTRXHistory( bot.publicKeyb58, entry.token.mint )
+                                        const executedPrice = priceNow;
+                                        const quantity = entry.qty || 1;
+                                        // Call tagBuy to record the new position with necessary details
+                                        await bot.overwatch.tagBuy({
+                                            mint: entry.token.mint,
+                                            qty: quantity,
+                                            entryPrice: executedPrice,
+                                            txid: txid
+                                        });
+                                        
                                         entry.status = "open";
                                         CoinStore.addOrUpdate(entry);
                                         await CoinStore.save();
@@ -146,6 +154,7 @@ async function buyMonitor(bot) {
                                     await CoinStore.save();
                                 } finally {
                                     bot.buyingTokens.delete(entry.token.mint);
+                                    logger.debug(`[BuyOps] Removed ${entry.token.mint} from buyingTokens.`);
                                 }
                             }
                         }
@@ -215,7 +224,7 @@ async function buyMonitor(bot) {
                     !bot.buyingTokens.has(entry.token.mint)
                 ) {
                     // Check wallet SOL balance before swap
-                    const solBalance = await bot.walletManager.getWalletAmount(bot.publicKeyb58, config.SOL_MINT);
+                    const solBalance = await bot.walletManager.getWalletAmount(bot.publicKeyb58, config.SOL_ADDRESS);
                     const minSOLBalance = parseFloat(process.env.AMOUNT) || 0.1;
                     if (solBalance < minSOLBalance) {
                         logger.warn(`⚠️ [BuyOps] Insufficient SOL balance (${solBalance}). Skipping swap for ${entry.token.symbol}.`);

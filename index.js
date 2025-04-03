@@ -7,6 +7,7 @@ const SwapManager = require("./lib/SwapManager");
 const Overwatch = require("./lib/OverWatch");
 const CoinStore = require('./lib/CoinStore');
 const { SolanaTracker } = require("solana-swap");
+const { fetchTrendingTokens } = require("./lib/solanaTrackerAPI")
 
 const EventEmitter = require('events');
 const runStartup = require('./bot/StartupManager');
@@ -37,7 +38,7 @@ class TradingBot extends EventEmitter {
       maxActivePositions: parseInt(process.env.MAX_ACTIVE_POSITIONS) || 5,
     };
 
-    this.SOL_ADDRESS = "So11111111111111111111111111111111111111112";
+    this.config.SOL_ADDRESS = process.env.SOL_ADDRESS || "So11111111111111111111111111111111111111112";
 
     this.privateKey = process.env.PRIVATE_KEY;
     this.keypair = Keypair.fromSecretKey(bs58.decode ? bs58.decode(this.privateKey) : bs58.default.decode(this.privateKey));
@@ -75,7 +76,7 @@ class TradingBot extends EventEmitter {
 
     try {
       // Fetch the latest trending coins
-      const trendingCoins = await this.solanaTracker.getTrendingTokens();
+      const trendingCoins = await fetchTrendingTokens();
       logger.info(`🔄 Syncing trending coins on startup...`);
       await CoinStore.syncTrendingCoins(trendingCoins);
       logger.info("✅ Trending coins synced successfully.");

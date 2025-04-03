@@ -17,6 +17,10 @@ async function monitorPositions(bot) {
 
             const positionChecks = openPositions.map(async (entry) => {
                 try {
+                    if (!entry.token || !entry.token.mint) {
+                        logger.warn(`[SellOps] Skipping entry with missing token or mint for ${entry.token?.symbol || 'UNKNOWN'}`);
+                        return;
+                    }
                     const mint = entry.token.mint;
                     logger.debug(`[SellOps] Processing entry for ${entry.token.symbol || 'UNKNOWN'}: position exists = ${Boolean(entry.position)}, sellingPositions contains ${mint} = ${bot.sellingPositions.has(mint)}`);
                     if (entry.status !== "open" || bot.sellingPositions.has(mint)) return;
@@ -86,6 +90,15 @@ async function monitorPositions(bot) {
                             closeTime: Date.now(),
                             closeTxid: txid,
                         };
+
+                        // Call tagSell to record the sell details
+                        await bot.overwatch.tagSell({
+                            mint: entry.token.mint,
+                            exitPrice: entry.sold.exitPrice,
+                            qty: entry.position?.amount || 1,
+                            txid: txid,
+                        });
+
                         delete entry.position;
                         await CoinStore.save();
                         logger.info(`💸 [SELL] ${entry.token?.symbol || "UNKNOWN"} sold at ${entry.sold.exitPrice}`);
