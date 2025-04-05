@@ -4,7 +4,6 @@ const bs58 = require("bs58");
 const logger = require('./utils/logger');
 const WalletManager = require("./lib/WalletManager");
 const SwapManager = require("./lib/SwapManager");
-// Removed OverWatch since its functionality is now in CoinManager
 const CoinManager = require('./lib/CoinManager');
 const { SolanaTracker } = require("solana-swap");
 const { fetchTrendingTokens } = require("./lib/solanaTrackerAPI");
@@ -56,7 +55,7 @@ class TradingBot extends EventEmitter {
       positionsFile: './positions.json',
       solanaTracker: this.solanaTracker
     });
-    
+
     // This unified CoinManager is automatically required and used in startup
     this.buyingTokens = new Set();
     this.sellingPositions = new Set();
