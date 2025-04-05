@@ -4,10 +4,10 @@ const bs58 = require("bs58");
 const logger = require('./utils/logger');
 const WalletManager = require("./lib/WalletManager");
 const SwapManager = require("./lib/SwapManager");
-const Overwatch = require("./lib/OverWatch");
-const CoinStore = require('./lib/CoinStore');
+// Removed OverWatch since its functionality is now in CoinManager
+const CoinManager = require('./lib/CoinManager');
 const { SolanaTracker } = require("solana-swap");
-const { fetchTrendingTokens } = require("./lib/solanaTrackerAPI")
+const { fetchTrendingTokens } = require("./lib/solanaTrackerAPI");
 
 const EventEmitter = require('events');
 const runStartup = require('./bot/StartupManager');
@@ -56,34 +56,42 @@ class TradingBot extends EventEmitter {
       positionsFile: './positions.json',
       solanaTracker: this.solanaTracker
     });
-    this.overwatch = new Overwatch(this.connection, this.walletManager, this.keypair);
+    
+    // This unified CoinManager is automatically required and used in startup
     this.buyingTokens = new Set();
     this.sellingPositions = new Set();
   }
 
   startHeartbeat() {
     setInterval(() => {
-      logger.info(`Heartbeat: monitoring ${this.overwatch.positions.size} open positions`);
+      // If you need to report on positions, use CoinManager.getAllCoins()
+      logger.info(`Heartbeat: monitoring ${CoinManager.getAllCoins().filter(c => c.status === 'open').length} open positions`);
     }, 30000);
   }
 
   async start() {
     logger.info("🚀 Starting Trading Bot...");
 
-    await this.overwatch.loadPositions();
-    await this.overwatch.loadSoldPositions();
-    await this.overwatch.validatePositions();
+    // Rebuild coins.json from your wallet data
+    await CoinManager.resetCoinsFromWallet(this.walletManager, this.keypair);
+
+    // Validate positions using the wallet manager and keypair
+    await CoinManager.validatePositions(this.walletManager, this.keypair);
 
     try {
-      // Fetch the latest trending coins
+      // Fetch the latest trending coins and sync them
       const trendingCoins = await fetchTrendingTokens();
-      logger.info(`🔄 Syncing trending coins on startup...`);
-      await CoinStore.syncTrendingCoins(trendingCoins);
+      logger.info("🔄 Syncing trending coins on startup...");
+      for (const trendingCoin of trendingCoins) {
+        CoinManager.addOrUpdateCoin(trendingCoin);
+      }
+      await CoinManager.saveCoins();
       logger.info("✅ Trending coins synced successfully.");
     } catch (error) {
       logger.error("❌ Error syncing trending coins during startup.", { error: error.message });
     }
 
+    // Rest of your startup logic...
     this.once('startup:complete', () => {
       logger.info("🟢 Startup complete. Launching operations...");
       this.startHeartbeat();

@@ -2,7 +2,7 @@ const { Keypair } = require("@solana/web3.js");
 const bs58 = require("bs58");
 const { SolanaTracker } = require("solana-swap");
 const logger = require("../utils/logger");
-const CoinStore = require("../lib/CoinStore");
+const CoinManager = require("../lib/CoinManager");
 
 module.exports = async function runStartup(bot) {
     try {
@@ -11,10 +11,11 @@ module.exports = async function runStartup(bot) {
         bot.solanaTracker = new SolanaTracker(bot.keypair, bot.config.rpcUrl);
 
         logger.info("📥 [STARTUP] Loading unified coins.json...");
-        await CoinStore.load();
+        await CoinManager.loadCoins();
 
-        const openPositions = CoinStore.filterByStatus("open");
-        const targets = CoinStore.filterByStatus("target");
+        const allCoins = CoinManager.getAllCoins();
+        const openPositions = allCoins.filter(coin => coin.status === 'open');
+        const targets = allCoins.filter(coin => coin.status === 'target');
 
         logger.info(`✅ [STARTUP] Loaded ${openPositions.length} open positions`);
         logger.info(`🎯 [STARTUP] Loaded ${targets.length} targets`);
@@ -26,7 +27,7 @@ module.exports = async function runStartup(bot) {
         }
 
         // Attach the store to the bot for use in BuyOps/SellOps
-        bot.CoinStore = CoinStore;
+        bot.CoinManager = CoinManager;
 
         logger.info("✅ [STARTUP] Startup phase complete.");
         bot.emit('startup:complete');

@@ -1,4 +1,5 @@
 {
+  "version": "3.0",
   "token": {
     "_note": "Token metadata from SolanaTracker",
     "name": "string - display name of the token",
@@ -72,7 +73,7 @@
   },
   "buysCount": "number - recent buy count",
   "sellsCount": "number - recent sell count",
-  "status": "string - internal bot status (e.g., 'hold', 'target', 'open', 'closed', 'blacklist')",
+  "status": "string - internal bot status; e.g., 'watch' (watching), 'active' (position open), 'closed' (no active position)",
   "chartData": {
     "_note": "Raw OHLCV chart data used to compute indicators",
     "ohlcv": "array - OHLCV candles with timestamp, open, high, low, close, volume"
@@ -92,14 +93,23 @@
     "trendBias": "boolean - optional flag based on trend"
   },
   "position": {
-    "_note": "Optional - only present when a position is active ('open')",
+    "_note": "Optional - only present when a position is active ('active')",
     "qty": "number - amount of token held",
     "entryPrice": "number - entry price in SOL",
     "txid": "string - transaction ID",
     "timestamp": "number - UNIX timestamp of purchase"
   },
+  "isOwned": "boolean - indicates whether an active position is held (true if 'position' exists)",
+  "positionState": "string - explicit state of the position: 'none', 'active', or 'closed'",
+  "analysis": {
+    "_note": "Computed analysis from indicators",
+    "buySignal": "boolean - indicates a computed buy signal",
+    "sellSignal": "boolean - indicates a computed sell signal",
+    "confidence": "number - confidence level of the signal (0-100)"
+  },
+  "alerts": "array - list of active alert messages",
   "lastUpdated": {
-    "_note": "Timestamp when the coin was last updated in CoinStore",
+    "_note": "Timestamp when the coin was last updated in the unified store",
     "value": "number - UNIX timestamp (ms)"
   },
   "notes": "string - internal notes (optional)"
