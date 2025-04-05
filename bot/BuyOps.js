@@ -173,7 +173,7 @@ async function executeBuys(bot, config, chartCache, openSlots) {
                 bot.buyingTokens.add(entry.token.mint);
                 try {
                     logger.debug(`[BuyOps] 🔄 Awaiting performSwap for ${entry.token.symbol}`);
-                    const txid = await bot.swapManager.performSwap(bot, { token: entry.token }, true);
+                    const txid = await bot.swapManager.performSwap(bot, entry, true);
                     logger.info(`💸 [BuyOps] Swap executed for ${entry.token.symbol} — txid: ${txid}`);
                     if (txid) {
                         entry.status = "open";
