@@ -176,6 +176,13 @@ async function executeBuys(bot, config, chartCache, openSlots) {
                     const txid = await bot.swapManager.performSwap(bot, entry, true);
                     logger.info(`💸 [BuyOps] Swap executed for ${entry.token.symbol} — txid: ${txid}`);
                     if (txid) {
+                        // Record the open position using CoinManager.openPosition
+                        const swapAmount = parseFloat(process.env.AMOUNT) || 0.1;
+                        await CoinManager.openPosition(entry.token.mint, {
+                            entryPrice: priceNow,
+                            qty: swapAmount,
+                            txid
+                        });
                         entry.status = "open";
                         CoinManager.addOrUpdateCoin(entry);
                         CoinManager.debouncedSaveCoins();
@@ -212,7 +219,7 @@ async function buyMonitor(bot) {
         await evaluateEntries(bot, config, chartCache);
         await executeBuys(bot, config, chartCache, openSlots);
         CoinManager.debouncedSaveCoins();
-        logger.debug(`[BuyOps] buyingTokens: ${JSON.stringify([...bot.buyingTokens])}`);
+        // logger.debug(`[BuyOps] buyingTokens: ${JSON.stringify([...bot.buyingTokens])}`);
         logger.debug(`[BuyOps] CoinManager contents before buy execution:`);
         const updatedAllCoins = CoinManager.getAllCoins();
         for (const entry of updatedAllCoins) {

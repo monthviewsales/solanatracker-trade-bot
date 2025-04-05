@@ -1,4 +1,4 @@
-const { fetchChartData } = require("../lib/solanaTrackerAPI");
+const { fetchChartData, fetchLivePriceData } = require("../lib/solanaTrackerAPI");
 const { calculateIndicators, evaluateSell } = require("../lib/indicators");
 const logger = require("../utils/logger");
 // Use the unified CoinManager
@@ -31,12 +31,13 @@ async function monitorPositions(bot) {
 
 async function processPosition(entry, bot, config, chartCache) {
     try {
+        const tokenSymbol = entry.token?.symbol || entry.price?.token?.symbol || 'UNKNOWN';
         if (!entry.token || !entry.token.mint) {
-            logger.warn(`[SellOps] Skipping entry with missing token or mint for ${entry.token?.symbol || 'UNKNOWN'}`);
+            logger.warn(`[SellOps] Skipping entry with missing token or mint for ${tokenSymbol}`);
             return;
         }
         const mint = entry.token.mint;
-        logger.debug(`[SellOps] Processing entry for ${entry.token.symbol || 'UNKNOWN'}: position exists = ${Boolean(entry.position)}, sellingPositions contains ${mint} = ${bot.sellingPositions.has(mint)}`);
+        logger.debug(`[SellOps] Processing entry for ${tokenSymbol}: position exists = ${Boolean(entry.position)}, sellingPositions contains ${mint} = ${bot.sellingPositions.has(mint)}`);
         if (entry.status !== "open" || bot.sellingPositions.has(mint)) return;
 
         const chartData = await validateSellData(entry, bot, config, chartCache);
@@ -81,7 +82,7 @@ async function validateSellData(entry, bot, config, chartCache) {
 
     const chartData = rawChartData.oclhv || [];
     if (!Array.isArray(chartData) || chartData.length === 0) {
-        logger.warn(`[SellOps] Empty chart data for ${entry.token.symbol || 'UNKNOWN'} — skipping sell`);
+        logger.warn(`[SellOps] Empty chart data for ${entry.token?.symbol || entry.price?.token?.symbol || 'UNKNOWN'} — skipping sell`);
         return null;
     }
 
@@ -90,13 +91,13 @@ async function validateSellData(entry, bot, config, chartCache) {
     entry.chartData = { oclhv: trimmedChart };
 
     if (chartData.length < 20) {
-        logger.warn(`[SellOps] Chart data too short for ${entry.token.symbol || 'UNKNOWN'} (got ${chartData.length} data points, require at least 20) — skipping sell`);
+        logger.warn(`[SellOps] Chart data too short for ${entry.token?.symbol || entry.price?.token?.symbol || 'UNKNOWN'} (got ${chartData.length} data points, require at least 20) — skipping sell`);
         return null;
     }
 
     const indicators = calculateIndicators(trimmedChart);
     if (!indicators || Object.keys(indicators).length === 0) {
-        logger.warn(`[SellOps] Unable to calculate indicators for ${entry.token.symbol || 'UNKNOWN'} — skipping sell`);
+        logger.warn(`[SellOps] Unable to calculate indicators for ${entry.token?.symbol || entry.price?.token?.symbol || 'UNKNOWN'} — skipping sell`);
         return null;
     }
 
@@ -106,31 +107,43 @@ async function validateSellData(entry, bot, config, chartCache) {
 
 async function executeSell(entry, bot, config, chartData) {
     const mint = entry.token.mint;
+    if (!entry.token.symbol && entry.price && entry.price.token && entry.price.token.symbol) {
+        entry.token.symbol = entry.price.token.symbol;
+    }
 
-    // Evaluate sell decision
+    // Validate required token fields using the new schema
+    const token = entry.token;
+    // Use token.symbol if available, otherwise fallback to entry.price.token.symbol
+    const tokenSymbol = token?.symbol || entry.price?.token?.symbol || 'UNKNOWN';
+    const requiredFields = ['mint'];
+    const missing = requiredFields.filter(f => !token?.[f]);
+    if (missing.length > 0) {
+        logger.warn(`⚠️ [SellOps] Incomplete token data for ${tokenSymbol} — missing: ${missing.join(", ")}`);
+        bot.sellingPositions.delete(mint);
+        return;
+    }
+
     const shouldSell = evaluateSell(entry, entry.position, config);
     if (!shouldSell) {
-        logger.debug(`🟡 [SellOps] Hold signal for ${entry.token.symbol} — sell conditions not met`);
+        logger.debug(`🟡 [SellOps] Hold signal for ${tokenSymbol} — sell conditions not met`);
         return;
     }
 
     // Fetch live price data
-    const live = bot.api?.fetchLivePriceData ? await bot.api.fetchLivePriceData(mint) : null;
+    const live = bot.api && bot.api.fetchLivePriceData ? await bot.api.fetchLivePriceData(mint) : await fetchLivePriceData(mint);
     if (!live) {
-        logger.warn(`⛔ [SellOps] Unable to fetch live price data for ${entry.token.symbol} — skipping sell`);
+        logger.warn(`⛔ [SellOps] Unable to fetch live price data for ${tokenSymbol} — skipping sell`);
         return;
     }
     if (live.liquidity < config.MIN_LIQUIDITY) {
-        logger.warn(`⛔ [SellOps] Live check blocked sell for ${entry.token.symbol} — liquidity: ${live?.liquidity ?? 'N/A'}`);
+        logger.warn(`⛔ [SellOps] Live check blocked sell for ${tokenSymbol} — liquidity: ${live?.liquidity ?? 'N/A'}`);
         return;
     }
 
     // Validate required token fields
-    const token = entry.token;
-    const requiredFields = ['mint', 'symbol', 'market'];
-    const missing = requiredFields.filter(f => !token?.[f]);
-    if (missing.length > 0) {
-        logger.warn(`⚠️ [SellOps] Incomplete token data for ${token?.symbol || "UNKNOWN"} — missing: ${missing.join(", ")}`);
+    const missingFields = requiredFields.filter(f => !token?.[f]);
+    if (missingFields.length > 0) {
+        logger.warn(`⚠️ [SellOps] Incomplete token data for ${tokenSymbol} — missing: ${missingFields.join(", ")}`);
         bot.sellingPositions.delete(mint);
         return;
     }
@@ -146,8 +159,8 @@ async function executeSell(entry, bot, config, chartData) {
         qty: entry.position?.amount || 1
     };
     // Use CoinManager to close the position
-    await CoinManager.closePosition(mint, sellData);
-    logger.info(`💸 [SELL] ${entry.token?.symbol || "UNKNOWN"} sold at ${sellData.exitPrice}`);
+    // await CoinManager.closePosition(mint, sellData);
+    //logger.info(`💸 [SELL] ${tokenSymbol} sold at ${sellData.exitPrice}`);
 
     bot.sellingPositions.delete(mint);
 }
