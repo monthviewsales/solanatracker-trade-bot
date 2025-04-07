@@ -1,6 +1,6 @@
 require("dotenv").config();
 const { calculateIndicators } = require("../lib/indicators");
-const { fetchTrendingTokens, fetchChartData, getTRXHistory, tradeHist } = require("../lib/solanaTrackerAPI");
+const { fetchTrendingTokens, fetchChartData, tradeHist } = require("../lib/solanaTrackerAPI");
 const { filterTokens } = require("../lib/tokenUtils");
 const { evaluateBuy } = require("../lib/indicators");
 const logger = require("../utils/logger");

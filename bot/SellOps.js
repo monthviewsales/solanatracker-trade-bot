@@ -1,4 +1,4 @@
-const { fetchChartData, fetchLivePriceData, getChartDataWithCache } = require("../lib/solanaTrackerAPI");
+const { fetchChartData, fetchLivePriceData } = require("../lib/solanaTrackerAPI");
 const { calculateIndicators, evaluateSell } = require("../lib/indicators");
 const logger = require("../utils/logger");
 // Use the unified CoinManager
@@ -9,6 +9,32 @@ module.exports = {
         await monitorPositions(bot);
     },
 };
+
+async function getChartDataWithCache(mint, chartCache) {
+    if (chartCache.has(mint)) {
+        return chartCache.get(mint);
+    }
+    const rawChartData = await fetchChartDataWithRetry(mint);
+    chartCache.set(mint, rawChartData);
+    return rawChartData;
+}
+
+async function fetchChartDataWithRetry(mint, retries = 2, delayMs = 500) {
+    let attempt = 0;
+    while (attempt <= retries) {
+        try {
+            const start = Date.now();
+            const data = await fetchChartData(mint);
+            const duration = Date.now() - start;
+            logger.debug(`[SellOps] fetchChartData for ${mint} took ${duration}ms`);
+            return data;
+        } catch (err) {
+            attempt++;
+            if (attempt > retries) throw err;
+            await sleep(delayMs);
+        }
+    }
+}
 
 async function monitorPositions(bot) {
     const { config } = bot;
@@ -31,7 +57,8 @@ async function monitorPositions(bot) {
 
 async function processPosition(entry, bot, config, chartCache) {
     try {
-        const tokenSymbol = entry.token?.symbol || entry.price?.token?.symbol || 'UNKNOWN';
+        const tokenSymbol = entry.token?.symbol || entry.price?.token?.symbol || entry.token?.name || entry.token?.address || 'UNKNOWN';
+        logger.debug(`[SellOps] Resolved token symbol: ${tokenSymbol} for mint: ${entry.token?.mint}`);
         if (!entry.token || !entry.token.mint) {
             logger.warn(`[SellOps] Skipping entry with missing token or mint for ${tokenSymbol}`);
             return;
@@ -46,17 +73,21 @@ async function processPosition(entry, bot, config, chartCache) {
         const chartData = await getChartDataWithCache(mint, chartCache);
         if (!chartData) return; // Skip processing if data validation fails
 
-        const priceNow = chartData?.at(-1)?.close || 0;
-        const entryPrice = entry.position?.entryPrice || 0;
-        if (Math.abs(priceNow - entryPrice) / entryPrice > config.maxAllowedPriceChange) {
-            logger.warn(`[SellOps] Price difference too large for ${tokenSymbol} — skipping sell`);
-            return;
+        let priceNow = 0;
+        if (Array.isArray(chartData)) {
+            priceNow = chartData.at(-1)?.close || 0;
+        } else if (chartData?.oclhv && Array.isArray(chartData.oclhv)) {
+            priceNow = chartData.oclhv.at(-1)?.close || 0;
+        } else {
+            logger.warn(`[SellOps] Unexpected chart data format for ${tokenSymbol}`);
         }
+        logger.debug(`[SellOps] Determined priceNow for ${tokenSymbol}: ${priceNow}`);
+        logger.debug(`[SellOps] Proceeding with sell decision for ${tokenSymbol} at price: ${priceNow}`);
 
         const requiredFields = ['mint', 'symbol', 'amount', 'entryPrice'];
-        const missingFields = requiredFields.filter(f => !entry.token?.[f]);
+        const missingFields = requiredFields.filter(f => !(entry.token?.[f] || entry.position?.[f]));
         if (missingFields.length > 0) {
-            logger.warn(`⚠️ [SellOps] Missing required fields for ${tokenSymbol} — ${missingFields.join(", ")}`);
+            logger.warn(`⚠️ [SellOps] Missing required fields for ${tokenSymbol} — ${missingFields.join(", ")} (checked token and position)`);
             bot.sellingPositions.delete(mint);
             return;
         }
