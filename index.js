@@ -6,7 +6,6 @@ const WalletManager = require("./lib/WalletManager");
 const SwapManager = require("./lib/SwapManager");
 const CoinManager = require('./lib/CoinManager');
 const { SolanaTracker } = require("solana-swap");
-const { fetchTrendingTokens } = require("./lib/solanaTrackerAPI");
 
 const EventEmitter = require('events');
 const runStartup = require('./bot/StartupManager');
@@ -15,12 +14,12 @@ class TradingBot extends EventEmitter {
   constructor() {
     super();
     this.config = {
-      amount: parseFloat(process.env.AMOUNT),
-      delay: parseInt(process.env.DELAY),
-      monitorInterval: parseInt(process.env.MONITOR_INTERVAL),
-      trendingtimeframe: process.env.TREND_TIME,
-      slippage: parseInt(process.env.SLIPPAGE),
-      priorityFee: parseFloat(process.env.PRIORITY_FEE),
+      amount: parseFloat(process.env.AMOUNT) || 0,
+      delay: parseInt(process.env.DELAY) || 1000, // Default to 1 second
+      monitorInterval: parseInt(process.env.MONITOR_INTERVAL) || 10000, // Default to 10 seconds
+      trendingtimeframe: process.env.TREND_TIME || '1h',
+      slippage: parseInt(process.env.SLIPPAGE) || 1, // Default to 1%
+      priorityFee: parseFloat(process.env.PRIORITY_FEE) || 0,
       useJito: process.env.JITO === "true",
       rpcUrl: process.env.RPC_URL,
       minLiquidity: parseFloat(process.env.MIN_LIQUIDITY) || 0,
@@ -40,7 +39,12 @@ class TradingBot extends EventEmitter {
     this.config.SOL_ADDRESS = process.env.SOL_ADDRESS || "So11111111111111111111111111111111111111112";
 
     this.privateKey = process.env.PRIVATE_KEY;
-    this.keypair = Keypair.fromSecretKey(bs58.decode ? bs58.decode(this.privateKey) : bs58.default.decode(this.privateKey));
+    try {
+      this.keypair = Keypair.fromSecretKey(bs58.decode ? bs58.decode(this.privateKey) : bs58.default.decode(this.privateKey));
+    } catch (error) {
+      logger.error("🔥 Failed to initialize keypair from the private key.", { error: error.message });
+      process.exit(1);
+    }
     this.publicKeyb58 = String(this.keypair.publicKey.toBase58());
     this.connection = new Connection(this.config.rpcUrl);
     this.walletManager = new WalletManager(this.connection, this.privateKey, this.keypair, this.publicKeyb58);
@@ -72,23 +76,15 @@ class TradingBot extends EventEmitter {
     logger.info("🚀 Starting Trading Bot...");
 
     // Rebuild coins.json from your wallet data
-    await CoinManager.resetCoinsFromWallet(this.walletManager, this.keypair);
-
-    // Validate positions using the wallet manager and keypair
-    await CoinManager.validatePositions(this.walletManager, this.keypair);
-
     try {
-      // Fetch the latest trending coins and sync them
-      const trendingCoins = await fetchTrendingTokens();
-      logger.info("🔄 Syncing trending coins on startup...");
-      for (const trendingCoin of trendingCoins) {
-        await CoinManager.addOrUpdateCoin(trendingCoin);
-      }
-      await CoinManager.saveCoins();
-      logger.info("✅ Trending coins synced successfully.");
+      await CoinManager.resetCoinsFromWallet(this.walletManager, this.keypair);
+      await CoinManager.validatePositions(this.walletManager, this.keypair);
     } catch (error) {
-      logger.error("❌ Error syncing trending coins during startup.", { error: error.message });
+      logger.error("🔥 Failed to initialize coins from wallet or validate positions.", { error: error.message });
+      process.exit(1);
     }
+
+    // Removed trending coin fetching logic
 
     // Rest of your startup logic...
     this.once('startup:complete', () => {
@@ -100,14 +96,22 @@ class TradingBot extends EventEmitter {
             require("./bot/BuyOps").start(this),
             require("./bot/SellOps").start(this)
           ]);
+          logger.info("🟢 Buy and Sell operations started successfully.");
         } catch (err) {
-          logger.error("🔥 Error during operations startup", { error: err });
+          logger.error("🔥 Error during operations startup. Exiting.", { error: err.message });
+          process.exit(1);
         }
       })();
     });
 
-    this.once('startup:error', (err) => {
-      logger.error("🔥 Startup failed. Exiting.", { error: err });
+    this.once('startup:error', async (err) => {
+      logger.error("🔥 Startup failed. Performing graceful shutdown.", { error: err.message });
+      try {
+        await this.walletManager.close();
+        await this.connection.close();
+      } catch (shutdownError) {
+        logger.error("❗ Error during shutdown", { error: shutdownError.message });
+      }
       process.exit(1);
     });
 

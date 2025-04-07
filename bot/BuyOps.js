@@ -11,18 +11,13 @@ function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function normalizeTrendingEntry(tokenEntry) {
-    return {
-        token: tokenEntry.token,
-        pools: tokenEntry.pools || [],
-        events: tokenEntry.events || {},
-        risk: tokenEntry.risk || {},
-        buysCount: tokenEntry.buysCount || 0,
-        sellsCount: tokenEntry.sellsCount || 0,
-        status: "hold",
-        chartData: {},
-        indicators: {}
-    };
+async function getChartDataWithCache(mint, chartCache) {
+    if (chartCache.has(mint)) {
+        return chartCache.get(mint);
+    }
+    const rawChartData = await fetchChartDataWithRetry(mint);
+    chartCache.set(mint, rawChartData);
+    return rawChartData;
 }
 
 async function fetchChartDataWithRetry(mint, retries = 2, delayMs = 500) {
@@ -53,11 +48,7 @@ async function processTrendingTokens(bot, config) {
         return true;
     });
     for (const token of filtered) {
-        const mint = token.token.mint;
-        if (!CoinManager.getCoin(mint)) {
-            const normalized = normalizeTrendingEntry(token);
-            CoinManager.addOrUpdateCoin(normalized);
-        }
+        CoinManager.addOrUpdateCoin(token);
     }
     CoinManager.debouncedSaveCoins();
 }
@@ -73,13 +64,7 @@ async function evaluateEntries(bot, config, chartCache) {
             logger.warn(`⚠️ [BuyOps] Skipping entry with missing token or mint during evaluation`);
             continue;
         }
-        let rawChartData;
-        if (chartCache.has(entry.token.mint)) {
-            rawChartData = chartCache.get(entry.token.mint);
-        } else {
-            rawChartData = await fetchChartDataWithRetry(entry.token.mint);
-            chartCache.set(entry.token.mint, rawChartData);
-        }
+        const rawChartData = await getChartDataWithCache(entry.token.mint, chartCache);
         const chartData = rawChartData.oclhv || [];
         if (!Array.isArray(chartData) || chartData.length === 0) {
             logger.warn(`⚠️ [BuyOps] Empty chart data for ${entry.token?.symbol || "UNKNOWN"}`);
@@ -134,13 +119,7 @@ async function executeBuys(bot, config, chartCache, openSlots) {
             logger.warn(`⚠️ [BuyOps] Skipping invalid entry with missing token or mint`);
             continue;
         }
-        let rawChartData;
-        if (chartCache.has(entry.token.mint)) {
-            rawChartData = chartCache.get(entry.token.mint);
-        } else {
-            rawChartData = await fetchChartDataWithRetry(entry.token.mint);
-            chartCache.set(entry.token.mint, rawChartData);
-        }
+        const rawChartData = await getChartDataWithCache(entry.token.mint, chartCache);
         const liveData = rawChartData;
         const priceNow = liveData?.oclhv?.at(-1)?.close;
         logger.debug(`[BuyOps] ${entry.token.symbol}: fetched priceNow = ${priceNow}`);
@@ -206,7 +185,8 @@ async function buyMonitor(bot) {
     const { config } = bot;
     try {
         const allCoins = CoinManager.getAllCoins();
-        const openPositions = allCoins.filter(coin => coin.status === 'open').length;
+        const openPositions = allCoins.filter(coin => coin.status === 'open' && coin.token?.mint !== config.SOL_ADDRESS).length;
+        logger.debug(`[BuyOps] Number of open positions (excluding SOL): ${openPositions}`);
         const maxActive = parseInt(process.env.MAX_ACTIVE_POSITIONS, 10);
         const openSlots = maxActive - openPositions;
         if (openSlots <= 0) {
