@@ -73,6 +73,29 @@ async function processPosition(entry, bot, config, chartCache) {
         const chartData = await getChartDataWithCache(mint, chartCache);
         if (!chartData) return; // Skip processing if data validation fails
 
+        const rawChartData = chartData?.oclhv || [];
+        if (!Array.isArray(rawChartData) || rawChartData.length === 0) {
+            logger.warn(`[SellOps] Empty chart data for ${tokenSymbol} — skipping sell`);
+            return;
+        }
+
+        // Trim to the last 50 data points for calculation
+        const trimmedChart = rawChartData.slice(-50);
+        entry.chartData = { oclhv: trimmedChart };
+        logger.debug(`[SellOps] Attached chart data to ${tokenSymbol} for evaluation`);
+
+        // Calculate indicators and attach to entry
+        const indicators = calculateIndicators(trimmedChart);
+        if (indicators && Object.keys(indicators).length > 0) {
+            entry.indicators = indicators;
+            logger.debug(`[SellOps] Calculated indicators for ${tokenSymbol}`);
+        } else {
+            logger.warn(`[SellOps] Failed to calculate indicators for ${tokenSymbol} — skipping sell`);
+            return;
+        }
+
+        logger.debug(`[SellOps] Final entry object for ${tokenSymbol}`);
+
         let priceNow = 0;
         if (Array.isArray(chartData)) {
             priceNow = chartData.at(-1)?.close || 0;
