@@ -82,7 +82,7 @@ class TradingBot extends EventEmitter {
       const trendingCoins = await fetchTrendingTokens();
       logger.info("🔄 Syncing trending coins on startup...");
       for (const trendingCoin of trendingCoins) {
-        CoinManager.addOrUpdateCoin(trendingCoin);
+        await CoinManager.addOrUpdateCoin(trendingCoin);
       }
       await CoinManager.saveCoins();
       logger.info("✅ Trending coins synced successfully.");
