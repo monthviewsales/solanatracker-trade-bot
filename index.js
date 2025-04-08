@@ -55,8 +55,6 @@ class TradingBot extends EventEmitter {
       keypair: this.keypair,
       publicKeyb58: this.publicKeyb58,
       config: this.config,
-      soldPositionsFile: './soldPositions.json',
-      positionsFile: './positions.json',
       solanaTracker: this.solanaTracker
     });
 

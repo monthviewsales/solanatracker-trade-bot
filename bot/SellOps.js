@@ -3,6 +3,9 @@ const { calculateIndicators, evaluateSell } = require("../lib/indicators");
 const logger = require("../utils/logger");
 // Use the unified CoinManager
 const CoinManager = require("../lib/CoinManager");
+const { SolanaTracker } = require('solana-swap');
+const { Keypair } = require('@solana/web3.js');
+const bs58 = require('bs58');
 
 module.exports = {
     async start(bot) {
@@ -126,19 +129,48 @@ async function processPosition(entry, bot, config, chartCache) {
             logger.warn(`⛔ [SellOps] Unable to fetch live price data for ${tokenSymbol} — skipping sell`);
             return;
         }
-        if (live.liquidity < config.MIN_LIQUIDITY) {
-            logger.warn(`⛔ [SellOps] Insufficient liquidity for ${tokenSymbol} — skipping sell`);
-            return;
-        }
 
         if (bot.sellingPositions.has(mint)) {
             logger.warn(`[SellOps] Duplicate sell attempt detected for ${tokenSymbol} — already in progress`);
             return;
         }
+        // bot.sellingPositions.add(entry.token.mint);
         bot.sellingPositions.add(mint);
 
+        const fromToken = entry.token.mint;
+        const toToken = "So11111111111111111111111111111111111111112"; // SOL mint address
+        const amount = entry.position.amount;
+        const slippage = config.SLIPPAGE || 0.005;
+        const priorityFee = config.priorityFee || 0.0005;
+
+        if (!bot.keypair) {
+            logger.error(`[SellOps] Missing keypair in bot configuration during swap for ${tokenSymbol}`);
+            return;
+        }
+
+        logger.debug(`[SellOps] Initiating swap for ${tokenSymbol} from ${fromToken} to ${toToken} with amount: ${amount}, slippage: ${slippage}, priority fee: ${priorityFee}`);
+
         try {
-            const txid = await bot.swapManager.performSwap(bot, entry, false);
+            const swapResponse = await bot.solanaTracker.getSwapInstructions(
+                fromToken, 
+                toToken, 
+                amount, 
+                slippage, 
+                bot.keypair.publicKey.toBase58(), 
+                priorityFee
+            );
+
+            const txid = await bot.solanaTracker.performSwap(swapResponse, {
+                sendOptions: { skipPreflight: true },
+                confirmationRetries: 30,
+                confirmationRetryTimeout: 500,
+                lastValidBlockHeightBuffer: 150,
+                resendInterval: 1000,
+                confirmationCheckInterval: 1000,
+                commitment: 'processed',
+                skipConfirmationCheck: false
+            });
+
             const sellData = {
                 exitPrice: chartData.at(-1)?.close || 0,
                 txid: txid,
@@ -146,6 +178,7 @@ async function processPosition(entry, bot, config, chartCache) {
             };
             await CoinManager.closePosition(mint, sellData);
             logger.info(`💸 [SELL] ${tokenSymbol} sold at ${sellData.exitPrice} — TXID: ${txid}`);
+            logger.debug(`[SellOps] Swap response for ${tokenSymbol}: ${JSON.stringify(swapResponse)}`);
         } catch (err) {
             logger.error(`❌ [SellOps] Swap failed for ${tokenSymbol} — ${err.message}`);
             bot.sellingPositions.delete(mint);
@@ -209,53 +242,6 @@ async function validateSellData(entry, bot, config, chartCache) {
 
     entry.indicators = indicators;
     return chartData;
-}
-
-async function executeSell(entry, bot, config, chartData) {
-    const mint = entry.token.mint;
-    if (!entry.token.symbol && entry.price && entry.price.token && entry.price.token.symbol) {
-        entry.token.symbol = entry.price.token.symbol;
-    }
-
-    // Validate required token fields using the new schema
-    const token = entry.token;
-    // Use token.symbol if available, otherwise fallback to entry.price.token.symbol
-    const tokenSymbol = token?.symbol || entry.price?.token?.symbol || 'UNKNOWN';
-
-    const shouldSell = evaluateSell(entry, entry.position, config);
-    if (!shouldSell) {
-        logger.debug(`[SellOps] Hold signal for ${tokenSymbol} — sell conditions not met`);
-        return;
-    }
-
-    // Fetch live price data
-    const live = bot.api && bot.api.fetchLivePriceData ? await bot.api.fetchLivePriceData(mint) : await fetchLivePriceData(mint);
-    if (!live) {
-        logger.warn(`⛔ [SellOps] Unable to fetch live price data for ${tokenSymbol} — skipping sell`);
-        return;
-    }
-    if (live.liquidity < config.MIN_LIQUIDITY) {
-        logger.warn(`⛔ [SellOps] Live check blocked sell for ${tokenSymbol} — liquidity: ${live?.liquidity ?? 'N/A'}`);
-        return;
-    }
-
-    bot.sellingPositions.add(mint);
-
-    try {
-        const txid = await bot.swapManager.performSwap(bot, entry, false);
-        const sellData = {
-            exitPrice: chartData.at(-1)?.close || 0,
-            txid: txid,
-            qty: entry.position?.amount || 1
-        };
-        await CoinManager.closePosition(mint, sellData);
-        logger.info(`💸 [SELL] ${tokenSymbol} sold at ${sellData.exitPrice}`);
-    } catch (err) {
-        logger.error(`❌ [SellOps] Failed to execute sell for ${tokenSymbol}`, { error: err.message });
-        bot.sellingPositions.delete(mint);
-        return;
-    }
-    bot.sellingPositions.delete(mint);
 }
 
 function calculatePnL(entry, percentage = false) {
