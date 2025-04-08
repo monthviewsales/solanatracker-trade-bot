@@ -217,6 +217,11 @@ async function buyMonitor(bot) {
 
 module.exports = {
     async start(bot) {
-        await buyMonitor(bot);
+        const delay = parseInt(process.env.MONITOR_INTERVAL, 10) || 30000;
+
+        while (true) {
+            await buyMonitor(bot);
+            await sleep(delay);
+        }
     },
 };

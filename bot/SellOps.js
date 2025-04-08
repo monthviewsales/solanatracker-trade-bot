@@ -226,6 +226,9 @@ async function processPosition(entry, bot, config, chartCache) {
             stack: err.stack,
         });
         bot.sellingPositions.delete(entry.token?.mint);
+    } finally {
+        bot.sellingPositions.delete(mint);
+        logger.debug(`[SellOps] Cleared selling flag for ${tokenSymbol}`);
     }
 }
 
