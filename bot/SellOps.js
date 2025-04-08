@@ -15,10 +15,27 @@ module.exports = {
 
 async function getChartDataWithCache(mint, chartCache) {
     if (chartCache.has(mint)) {
+        logger.debug(`[SellOps] Loaded chart data from cache for ${mint}`);
         return chartCache.get(mint);
     }
+    // Try to load from CoinManager if not in cache
+    const storedData = CoinManager.getCoin(mint)?.chartData;
+    if (storedData) {
+        chartCache.set(mint, storedData);
+        logger.debug(`[SellOps] Loaded chart data from coins.json for ${mint}`);
+        return storedData;
+    }
+    // Fetch fresh data if not found in cache or coins.json
     const rawChartData = await fetchChartDataWithRetry(mint);
-    chartCache.set(mint, rawChartData);
+    if (rawChartData) {
+        chartCache.set(mint, rawChartData);
+        // Update coin data with chart data
+        const coin = CoinManager.getCoin(mint);
+        if (coin) {
+            coin.chartData = rawChartData;
+            CoinManager.addOrUpdateCoin(coin);
+        }
+    }
     return rawChartData;
 }
 
@@ -59,6 +76,7 @@ async function monitorPositions(bot) {
 }
 
 async function processPosition(entry, bot, config, chartCache) {
+    let attempt = 0;
     try {
         const tokenSymbol = entry.token?.symbol || entry.price?.token?.symbol || entry.token?.name || entry.token?.address || 'UNKNOWN';
         logger.debug(`[SellOps] Resolved token symbol: ${tokenSymbol} for mint: ${entry.token?.mint}`);
@@ -73,19 +91,17 @@ async function processPosition(entry, bot, config, chartCache) {
             return;
         }
 
-        const chartData = await getChartDataWithCache(mint, chartCache);
-        if (!chartData) return; // Skip processing if data validation fails
-
-        const rawChartData = chartData?.oclhv || [];
-        if (!Array.isArray(rawChartData) || rawChartData.length === 0) {
-            logger.warn(`[SellOps] Empty chart data for ${tokenSymbol} — skipping sell`);
-            return;
+        const rawChartData = await getChartDataWithCache(mint, chartCache);
+        const chartData = rawChartData.oclhv || [];
+        if (!Array.isArray(chartData) || chartData.length === 0) {
+            logger.warn(`⚠️ [SellOps] Empty chart data for ${entry.token?.symbol || "UNKNOWN"}`);
         }
-
-        // Trim to the last 50 data points for calculation
-        const trimmedChart = rawChartData.slice(-50);
+        const trimmedChart = chartData.slice(-50);
         entry.chartData = { oclhv: trimmedChart };
-        logger.debug(`[SellOps] Attached chart data to ${tokenSymbol} for evaluation`);
+        if (chartData.length < 20) {
+            logger.warn(`📉 [SellOps] Chart data too short for ${entry.token?.symbol || "UNKNOWN"} — skipping`);
+            CoinManager.addOrUpdateCoin(entry);
+        }
 
         // Calculate indicators and attach to entry
         const indicators = calculateIndicators(trimmedChart);
@@ -105,9 +121,10 @@ async function processPosition(entry, bot, config, chartCache) {
         } else if (chartData?.oclhv && Array.isArray(chartData.oclhv)) {
             priceNow = chartData.oclhv.at(-1)?.close || 0;
         } else {
-            logger.warn(`[SellOps] Unexpected chart data format for ${tokenSymbol}`);
+            logger.warn(`[SellOps] Invalid chart data format for ${tokenSymbol} — skipping sell`);
+            return;
         }
-        logger.debug(`[SellOps] Determined priceNow for ${tokenSymbol}: ${priceNow}`);
+        logger.debug(`[SellOps] Extracted priceNow for ${tokenSymbol}: ${priceNow}`);
         logger.debug(`[SellOps] Proceeding with sell decision for ${tokenSymbol} at price: ${priceNow}`);
 
         const requiredFields = ['mint', 'symbol', 'amount', 'entryPrice'];
@@ -138,8 +155,8 @@ async function processPosition(entry, bot, config, chartCache) {
         bot.sellingPositions.add(mint);
 
         const fromToken = entry.token.mint;
-        const toToken = "So11111111111111111111111111111111111111112"; // SOL mint address
-        const amount = entry.position.amount;
+        const toToken = config.SOL_ADDRESS || "So11111111111111111111111111111111111111112"; // SOL mint address
+        const amount = "auto";
         const slippage = config.SLIPPAGE || 0.005;
         const priorityFee = config.priorityFee || 0.0005;
 
@@ -147,6 +164,8 @@ async function processPosition(entry, bot, config, chartCache) {
             logger.error(`[SellOps] Missing keypair in bot configuration during swap for ${tokenSymbol}`);
             return;
         }
+
+        const minAmountOut = Math.floor(amount * priceNow * (1 - slippage));
 
         logger.debug(`[SellOps] Initiating swap for ${tokenSymbol} from ${fromToken} to ${toToken} with amount: ${amount}, slippage: ${slippage}, priority fee: ${priorityFee}`);
 
@@ -157,7 +176,8 @@ async function processPosition(entry, bot, config, chartCache) {
                 amount, 
                 slippage, 
                 bot.keypair.publicKey.toBase58(), 
-                priorityFee
+                priorityFee,
+                { minAmountOut }
             );
 
             const txid = await bot.solanaTracker.performSwap(swapResponse, {
@@ -180,7 +200,19 @@ async function processPosition(entry, bot, config, chartCache) {
             logger.info(`💸 [SELL] ${tokenSymbol} sold at ${sellData.exitPrice} — TXID: ${txid}`);
             logger.debug(`[SellOps] Swap response for ${tokenSymbol}: ${JSON.stringify(swapResponse)}`);
         } catch (err) {
-            logger.error(`❌ [SellOps] Swap failed for ${tokenSymbol} — ${err.message}`);
+            logger.error(`❌ [SellOps] Swap failed for ${tokenSymbol} — ${err.message} (response: ${JSON.stringify(err.response?.data)})`);
+            if (err.response?.status === 429) {
+                logger.warn(`[SellOps] Rate limit hit for ${tokenSymbol} — retrying after 500ms`);
+                await sleep(500);
+                return await processPosition(entry, bot, config, chartCache); // Retry the same position
+            }
+            if (err.response?.status === 500) {
+                attempt++;
+                const retryDelay = Math.min(500 * Math.pow(2, attempt), 5000); // Exponential backoff
+                logger.warn(`[SellOps] Server error for ${tokenSymbol} — retrying after ${retryDelay}ms (attempt ${attempt})`);
+                await sleep(retryDelay);
+                return await processPosition(entry, bot, config, chartCache); // Retry the same position
+            }
             bot.sellingPositions.delete(mint);
             return;
         }
