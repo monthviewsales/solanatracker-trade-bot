@@ -63,6 +63,13 @@ async function monitorPositions(bot) {
         try {
             const chartCache = new Map();
             const openPositions = CoinManager.getAllCoins().filter(coin => coin.status === "open");
+            
+            openPositions.forEach(coin => {
+                if (!coin.position || !Number.isFinite(coin.position.entryPrice)) {
+                    logger.warn(`[SellOps] OPEN coin ${coin.token?.symbol || coin.token?.address} has no valid position!`);
+                }
+            });
+
             const positionChecks = openPositions.map((entry) => processPosition(entry, bot, config, chartCache));
 
             await Promise.allSettled(positionChecks);
@@ -247,52 +254,6 @@ async function fetchChartDataWithRetry(mint, retries = 2, delayMs = 500) {
             await sleep(delayMs);
         }
     }
-}
-
-async function validateSellData(entry, bot, config, chartCache) {
-    const mint = entry.token.mint;
-    const chartData = await getChartDataWithCache(mint, chartCache);
-    if (!chartData) return null;
-
-    const rawChartData = chartData.oclhv || [];
-    if (!Array.isArray(rawChartData) || rawChartData.length === 0) {
-        logger.warn(`[SellOps] Empty chart data for ${entry.token?.symbol || entry.price?.token?.symbol || 'UNKNOWN'} — skipping sell`);
-        return null;
-    }
-
-    // Trim to the last 50 candles
-    const trimmedChart = rawChartData.slice(-50);
-    entry.chartData = { oclhv: trimmedChart };
-
-    if (rawChartData.length < 20) {
-        logger.warn(`[SellOps] Chart data too short for ${entry.token?.symbol || entry.price?.token?.symbol || 'UNKNOWN'} (got ${rawChartData.length} data points, require at least 20) — skipping sell`);
-        return null;
-    }
-
-    const indicators = calculateIndicators(trimmedChart);
-    if (!indicators || Object.keys(indicators).length === 0) {
-        logger.warn(`[SellOps] Unable to calculate indicators for ${entry.token?.symbol || entry.price?.token?.symbol || 'UNKNOWN'} — skipping sell`);
-        return null;
-    }
-
-    entry.indicators = indicators;
-    return chartData;
-}
-
-function calculatePnL(entry, percentage = false) {
-    const entryPrice = Number.isFinite(entry?.position?.entryPrice) ? entry.position.entryPrice : 0;
-    const amount = Number.isFinite(entry?.position?.amount) ? entry.position.amount : 1;
-    const exitPrice = Number.isFinite(entry?.sold?.exitPrice) ? entry.sold.exitPrice : (entry.chartData?.oclhv?.at(-1)?.close || entry.position?.entryPrice);
-    
-    if (entryPrice === 0 || amount === 0) {
-        return percentage ? 0 : 0;
-    }
-
-    const pnl = (exitPrice - entryPrice) * amount;
-    if (percentage) {
-        return (pnl / (entryPrice * amount)) * 100;
-    }
-    return pnl;
 }
 
 function sleep(ms) {
