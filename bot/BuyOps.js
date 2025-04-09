@@ -48,9 +48,20 @@ async function processTrendingTokens(bot, config) {
         return true;
     });
     for (const token of filtered) {
-        CoinManager.addOrUpdateCoin(token);
+        try {
+            if (!token.pools?.[0]) {
+                logger.warn(`⚠️ [BuyOps] Skipping token ${token.token?.symbol || "UNKNOWN"} — missing liquidity pool`);
+                continue;
+            }
+            CoinManager.normalizeCoin(token);
+            logger.info(`✅ [BuyOps] Normalizing new coin post filter: ${token.token.symbol} (${token.token.mint})`);
+            CoinManager.addOrUpdateCoin(token);
+            CoinManager.debouncedSaveCoins();
+            logger.info(`✅ [BuyOps] Successfully Added after filter: ${token.token.symbol} (${token.token.mint})`);
+        } catch (err) {
+            logger.error(`❌ [BuyOps] Post Filter import failed for ${token.token?.symbol || "UNKNOWN"} — ${err.message}`, err);
+        }
     }
-    CoinManager.debouncedSaveCoins();
 }
 
 async function evaluateEntries(bot, config, chartCache) {
