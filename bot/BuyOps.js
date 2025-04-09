@@ -64,6 +64,10 @@ async function evaluateEntries(bot, config, chartCache) {
             logger.warn(`⚠️ [BuyOps] Skipping entry with missing token or mint during evaluation`);
             continue;
         }
+        if (!entry.token || !entry.token.mint === config.SOL_ADDRESS) {
+            logger.warn(`⚠️ [BuyOps] Skipping SOL`);
+            continue;
+        }
         const rawChartData = await getChartDataWithCache(entry.token.mint, chartCache);
         const chartData = rawChartData.oclhv || [];
         if (!Array.isArray(chartData) || chartData.length === 0) {
@@ -114,7 +118,14 @@ async function executeBuys(bot, config, chartCache, openSlots) {
     const allCoins = CoinManager.getAllCoins();
     let buys = 0;
     for (const entry of allCoins) {
-        if (buys >= openSlots) break;
+        if (buys >= openSlots){
+            logger.warn(`⚠️ [BuyOps] Skipping Buys, No Open Slots.  See ya in a cycle.`);
+            break;
+        }
+        if (entry.token?.mint !== config.SOL_ADDRESS) {
+            logger.warn(`⚠️ [BuyOps] How the hell did SOL get in here?`);
+            continue;
+        }
         if (!entry.token || !entry.token.mint) {
             logger.warn(`⚠️ [BuyOps] Skipping invalid entry with missing token or mint`);
             continue;
