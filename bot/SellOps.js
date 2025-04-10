@@ -1,91 +1,8 @@
-const { fetchChartData, fetchLivePriceData } = require("../lib/solanaTrackerAPI");
-const { calculateIndicators, evaluateSell } = require("../lib/indicators");
-const logger = require("../utils/logger");
-// Use the unified CoinManager
-const CoinManager = require("../lib/CoinManager");
-const { SolanaTracker } = require('solana-swap');
-const { Keypair } = require('@solana/web3.js');
-const bs58 = require('bs58');
-
-module.exports = {
-    async start(bot) {
-        await monitorPositions(bot);
-    },
-};
-
-async function getChartDataWithCache(mint, chartCache) {
-    if (chartCache.has(mint)) {
-        logger.debug(`[SellOps] Loaded chart data from cache for ${mint}`);
-        return chartCache.get(mint);
-    }
-    // Try to load from CoinManager if not in cache
-    const storedData = CoinManager.getCoin(mint)?.chartData;
-    if (storedData) {
-        chartCache.set(mint, storedData);
-        logger.debug(`[SellOps] Loaded chart data from coins.json for ${mint}`);
-        return storedData;
-    }
-    // Fetch fresh data if not found in cache or coins.json
-    const rawChartData = await fetchChartDataWithRetry(mint);
-    if (rawChartData) {
-        chartCache.set(mint, rawChartData);
-        // Update coin data with chart data
-        const coin = CoinManager.getCoin(mint);
-        if (coin) {
-            coin.chartData = rawChartData;
-            CoinManager.addOrUpdateCoin(coin);
-        }
-    }
-    return rawChartData;
-}
-
-async function fetchChartDataWithRetry(mint, retries = 2, delayMs = 500) {
-    let attempt = 0;
-    while (attempt <= retries) {
-        try {
-            const start = Date.now();
-            const data = await fetchChartData(mint);
-            const duration = Date.now() - start;
-            logger.debug(`[SellOps] fetchChartData for ${mint} took ${duration}ms`);
-            return data;
-        } catch (err) {
-            attempt++;
-            if (attempt > retries) throw err;
-            await sleep(delayMs);
-        }
-    }
-}
-
-async function monitorPositions(bot) {
-    const { config } = bot;
-
-    while (true) {
-        try {
-            const chartCache = new Map();
-            const openPositions = CoinManager.getAllCoins().filter(coin => coin.status === "open");
-            
-            openPositions.forEach(coin => {
-                if (!coin.position || !Number.isFinite(coin.position.entryPrice)) {
-                    logger.warn(`[SellOps] OPEN coin ${coin.token?.symbol || coin.token?.address} has no valid position!`);
-                }
-            });
-
-            const positionChecks = openPositions.map((entry) => processPosition(entry, bot, config, chartCache));
-
-            await Promise.allSettled(positionChecks);
-        } catch (err) {
-            logger.error("🔥 [SellOps] Main loop error", { error: err });
-            await sleep(config.errorRetryDelay || 5000); // Graceful retry after an error
-        }
-
-        await sleep(config.monitorInterval);
-    }
-}
-
 async function processPosition(entry, bot, config, chartCache) {
-    let attempt = 0;
+    // Declare tokenSymbol in outer scope to be available in both try and finally blocks
+    let tokenSymbol = entry.token?.symbol || entry.token?.name || entry.token?.address || 'UNKNOWN';
     try {
-        const tokenSymbol = entry.token?.symbol || entry.price?.token?.symbol || entry.token?.name || entry.token?.address || 'UNKNOWN';
+        // Use tokenSymbol as before
         logger.debug(`[SellOps] Resolved token symbol: ${tokenSymbol} for mint: ${entry.token?.mint}`);
         if (!entry.token || !entry.token.mint) {
             logger.warn(`[SellOps] Skipping entry with missing token or mint for ${tokenSymbol}`);
@@ -158,12 +75,11 @@ async function processPosition(entry, bot, config, chartCache) {
             logger.warn(`[SellOps] Duplicate sell attempt detected for ${tokenSymbol} — already in progress`);
             return;
         }
-        // bot.sellingPositions.add(entry.token.mint);
         bot.sellingPositions.add(mint);
 
         const fromToken = entry.token.mint;
         const toToken = config.SOL_ADDRESS || "So11111111111111111111111111111111111111112"; // SOL mint address
-        const amount = "auto";
+        const amount = (entry.position && Number.isFinite(entry.position.amount) && entry.position.amount > 0) ? entry.position.amount : 1;
         const slippage = config.SLIPPAGE || 0.005;
         const priorityFee = config.priorityFee || 0.0005;
 
@@ -186,6 +102,12 @@ async function processPosition(entry, bot, config, chartCache) {
                 priorityFee,
                 { minAmountOut }
             );
+
+            // If swapResponse.raydium exists but minAmountOut is null, set it to our calculated minAmountOut
+            if (swapResponse && swapResponse.raydium && swapResponse.raydium.minAmountOut == null) {
+                logger.warn(`[SellOps] raydium.minAmountOut is null for ${tokenSymbol}, setting default value: ${minAmountOut}`);
+                swapResponse.raydium.minAmountOut = minAmountOut;
+            }
 
             const txid = await bot.solanaTracker.performSwap(swapResponse, {
                 sendOptions: { skipPreflight: true },
@@ -211,14 +133,14 @@ async function processPosition(entry, bot, config, chartCache) {
             if (err.response?.status === 429) {
                 logger.warn(`[SellOps] Rate limit hit for ${tokenSymbol} — retrying after 500ms`);
                 await sleep(500);
-                return await processPosition(entry, bot, config, chartCache); // Retry the same position
+                return await processPosition(entry, bot, config, chartCache);
             }
             if (err.response?.status === 500) {
                 attempt++;
-                const retryDelay = Math.min(500 * Math.pow(2, attempt), 5000); // Exponential backoff
+                const retryDelay = Math.min(500 * Math.pow(2, attempt), 5000);
                 logger.warn(`[SellOps] Server error for ${tokenSymbol} — retrying after ${retryDelay}ms (attempt ${attempt})`);
                 await sleep(retryDelay);
-                return await processPosition(entry, bot, config, chartCache); // Retry the same position
+                return await processPosition(entry, bot, config, chartCache);
             }
             bot.sellingPositions.delete(mint);
             return;
@@ -237,25 +159,4 @@ async function processPosition(entry, bot, config, chartCache) {
         bot.sellingPositions.delete(entry.token?.mint);
         logger.debug(`[SellOps] Cleared selling flag for ${tokenSymbol}`);
     }
-}
-
-async function fetchChartDataWithRetry(mint, retries = 2, delayMs = 500) {
-    let attempt = 0;
-    while (attempt <= retries) {
-        try {
-            const start = Date.now();
-            const data = await fetchChartData(mint);
-            const duration = Date.now() - start;
-            logger.debug(`[SellOps] fetchChartData for ${mint} took ${duration}ms`);
-            return data;
-        } catch (err) {
-            attempt++;
-            if (attempt > retries) throw err;
-            await sleep(delayMs);
-        }
-    }
-}
-
-function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
 }
