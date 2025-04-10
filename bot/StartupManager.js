@@ -14,7 +14,7 @@ module.exports = async function runStartup(bot) {
         await CoinManager.loadCoins();
 
         const allCoins = CoinManager.getAllCoins();
-        const openPositions = allCoins.filter(coin => coin.status === 'open');
+        const openPositions = allCoins.filter(coin => coin.status === 'open' && coin.token?.mint !== config.SOL_ADDRESS);
         const targets = allCoins.filter(coin => coin.status === 'target');
 
         logger.info(`✅ [STARTUP] Loaded ${openPositions.length} open positions (including SOL)`);

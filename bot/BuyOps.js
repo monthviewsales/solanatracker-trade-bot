@@ -126,9 +126,11 @@ async function evaluateEntries(bot, config, chartCache) {
 }
 
 async function executeBuys(bot, config, chartCache, openSlots) {
+    // const allCoins = CoinManager.getAllCoins();
     const allCoins = CoinManager.getAllCoins();
+    const allOpenCoins = allCoins.filter(coin => coin.status === 'open' && coin.token?.mint !== config.SOL_ADDRESS).length;
     let buys = 0;
-    for (const entry of allCoins) {
+    for (const entry of allOpenCoins) {
         if (buys >= openSlots){
             logger.warn(`⚠️ [BuyOps] Skipping Buys, No Open Slots.  See ya in a cycle.`);
             break;
@@ -208,11 +210,11 @@ async function buyMonitor(bot) {
     try {
         const allCoins = CoinManager.getAllCoins();
         const openPositions = allCoins.filter(coin => coin.status === 'open' && coin.token?.mint !== config.SOL_ADDRESS).length;
-        logger.debug(`[BuyOps] Number of open positions (excluding SOL): ${openPositions}`);
+        logger.debug(`[BuyOps] buyMonitor: Number of open positions (excluding SOL): ${openPositions}`);
         const maxActive = parseInt(process.env.MAX_ACTIVE_POSITIONS, 10);
         const openSlots = maxActive - openPositions;
         if (openSlots <= 0) {
-            logger.warn(`Max active positions reached (${maxActive}). Open positions: ${openPositions}. Skipping buys until a slot opens.`);
+            logger.warn(`[BuyOps] buyMonitor: Max active positions reached (${maxActive}). Open positions: ${openPositions}. Skipping buys until a slot opens.`);
             await sleep(parseInt(process.env.DELAY) || 1000);
             return;
         }
@@ -222,13 +224,13 @@ async function buyMonitor(bot) {
         await executeBuys(bot, config, chartCache, openSlots);
         CoinManager.debouncedSaveCoins();
         // logger.debug(`[BuyOps] buyingTokens: ${JSON.stringify([...bot.buyingTokens])}`);
-        logger.debug(`[BuyOps] CoinManager contents before buy execution:`);
+        logger.debug(`[BuyOps] buyMonitor: CoinManager contents before buy execution:`);
         const updatedAllCoins = CoinManager.getAllCoins();
         for (const entry of updatedAllCoins) {
-            logger.debug(`🧾 [BuyOps] ${entry.token?.symbol || "UNKNOWN"} — status: ${entry.status}`);
+            logger.debug(`🧾 [BuyOps] buyMonitor: ${entry.token?.symbol || "UNKNOWN"} — status: ${entry.status}`);
         }
     } catch (err) {
-        logger.error(`🔥 [BuyOps] Unhandled error: ${err.message}`, {
+        logger.error(`🔥 [BuyOps] buyMonitor:  Unhandled error: ${err.message}`, {
             stack: err.stack,
             error: err
         });
