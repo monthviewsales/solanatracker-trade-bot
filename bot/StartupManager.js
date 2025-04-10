@@ -17,12 +17,12 @@ module.exports = async function runStartup(bot) {
         const openPositions = allCoins.filter(coin => coin.status === 'open');
         const targets = allCoins.filter(coin => coin.status === 'target');
 
-        logger.info(`✅ [STARTUP] Loaded ${openPositions.length} open positions`);
+        logger.info(`✅ [STARTUP] Loaded ${openPositions.length} open positions (including SOL)`);
         logger.info(`🎯 [STARTUP] Loaded ${targets.length} targets`);
 
         // Optionally, validate open positions against on-chain data
         for (const coin of openPositions) {
-            logger.info(`🔍 Validating position: ${coin.symbol}`);
+            logger.info(`🔍 Validating position: ${coin.token?.symbol || 'UNKNOWN'}`);
             // You could call SolanaTracker to confirm balances or txs
         }
 
