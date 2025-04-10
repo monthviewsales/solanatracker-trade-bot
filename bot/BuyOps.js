@@ -133,7 +133,7 @@ async function executeBuys(bot, config, chartCache, openSlots) {
             logger.warn(`⚠️ [BuyOps] Skipping Buys, No Open Slots.  See ya in a cycle.`);
             break;
         }
-        if (entry.token?.mint !== config.SOL_ADDRESS) {
+        if (entry.token?.mint === config.SOL_ADDRESS) {
             logger.warn(`⚠️ [BuyOps] How the hell did SOL get in here?`);
             continue;
         }
