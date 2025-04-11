@@ -37,12 +37,12 @@ async function fetchChartDataWithRetry(mint, retries = 2, delayMs = 500) {
     }
 }
 
-async function processTrendingTokens(bot, config) {
+async function processTrendingTokens(config) {
     const trending = await fetchTrendingTokens(config.trendingtimeframe);
     const filtered = filterTokens(trending, CoinManager).filter(token => {
         const existingEntry = CoinManager.getCoin(token.token.mint);
-        if (existingEntry && existingEntry.status === "blacklist") {
-            logger.info(`🚫 [BuyOps] Ignoring blacklisted token: ${token.token.symbol} (${token.token.mint})`);
+        if (existingEntry && (existingEntry.status === "blacklist" || existingEntry.status === "open")) {
+            logger.info(`🚫 [BuyOps] Ignoring open or blacklisted token: ${token.token.symbol} (${token.token.mint})`);
             return false;
         }
         return true;
@@ -53,8 +53,6 @@ async function processTrendingTokens(bot, config) {
                 logger.warn(`⚠️ [BuyOps] Skipping token ${token.token?.symbol || "UNKNOWN"} — missing liquidity pool`);
                 continue;
             }
-            CoinManager.normalizeCoin(token);
-            logger.info(`✅ [BuyOps] Normalizing new coin post filter: ${token.token.symbol} (${token.token.mint})`);
             CoinManager.addOrUpdateCoin(token);
             CoinManager.debouncedSaveCoins();
             logger.info(`✅ [BuyOps] Successfully Added after filter: ${token.token.symbol} (${token.token.mint})`);
@@ -66,9 +64,10 @@ async function processTrendingTokens(bot, config) {
 
 async function evaluateEntries(bot, config, chartCache) {
     const allCoins = CoinManager.getAllCoins();
-    for (const entry of allCoins) {
-        if (entry.status === "blacklist") {
-            logger.info(`🚫 [BuyOps] Skipping blacklisted token during buy evaluation: ${entry.token?.symbol || "UNKNOWN"}`);
+    const holdPositions = allCoins.filter(coin => coin.status === 'hold' && coin.token?.mint !== bot.config.SOL_ADDRESS);
+    for (const entry of holdPositions) {
+        if (entry.status === "blacklist" || entry.status === "open") {
+            logger.info(`🚫 [BuyOps] Skipping open/blacklisted token during buy evaluation: ${entry.token?.symbol || "UNKNOWN"}`);
             continue;
         }
         if (!entry.token || !entry.token.mint) {
@@ -126,9 +125,9 @@ async function evaluateEntries(bot, config, chartCache) {
 }
 
 async function executeBuys(bot, config, chartCache, openSlots) {
-    // const allCoins = CoinManager.getAllCoins();
+
     const allCoins = CoinManager.getAllCoins();
-    const allOpenCoins = allCoins.filter(coin => coin.status === 'open' && coin.token?.mint !== config.SOL_ADDRESS).length;
+    const allOpenCoins = allCoins.filter(coin => coin.status === 'open' && coin.token?.mint !== config.SOL_ADDRESS);
     let buys = 0;
     for (const entry of allOpenCoins) {
         if (buys >= openSlots){

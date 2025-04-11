@@ -62,7 +62,7 @@ async function monitorPositions(bot) {
     while (true) {
         try {
             const chartCache = new Map();
-            const openPositions = CoinManager.getAllCoins().filter(coin => coin.status === "open" && coin.token?.mint !== config.SOL_ADDRESS).length;
+            const openPositions = CoinManager.getAllCoins().filter(coin => coin.status === "open" && coin.token?.mint !== config.SOL_ADDRESS);
 
             openPositions.forEach(coin => {
                 if (!coin.position || !Number.isFinite(coin.position.entryPrice)) {
@@ -235,7 +235,7 @@ async function processPosition(entry, bot, config, chartCache) {
         bot.sellingPositions.delete(entry.token?.mint);
     } finally {
         bot.sellingPositions.delete(entry.token?.mint);
-        logger.debug(`[SellOps] processPosition: Cleared selling flag for ${tokenSymbol}`);
+        logger.debug(`[SellOps] processPosition: Cleared selling flag for ${entry.token?.symbol}`);
     }
 }
 
